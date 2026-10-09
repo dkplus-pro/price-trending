@@ -1,0 +1,6 @@
+{
+  "_note": "手工构造的异常响应(非实测):K 线端点 data 为 null(非法 secid 时东财的真实形态同 trends-data-null.json 的 rc=100/data:null),验证「结构变形 → { bars: [], hasMore: false }不抛异常」。",
+  "rc": 0,
+  "rt": 17,
+  "data": null
+}

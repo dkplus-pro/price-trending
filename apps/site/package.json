@@ -5,9 +5,10 @@
   "description": "对外站点 app(Modern.js SSR;消费 openapi/site.yaml,开发规范见 docs/site.md)。",
   "type": "module",
   "scripts": {
-    "check:budgets": "node scripts/check-budgets.mjs",
-    "build": "NODE_ENV=production modern build && node scripts/check-budgets.mjs",
+    "build": "node scripts/clean-build.mjs && NODE_ENV=production modern build && node scripts/check-budgets.mjs",
     "build:analyze": "ANALYZE=true modern build",
+    "build:github-pages": "node scripts/clean-build.mjs && SITE_STATIC_EXPORT=true NODE_ENV=production modern build && node scripts/copy-404.mjs && node scripts/check-budgets.mjs",
+    "check:budgets": "node scripts/check-budgets.mjs",
     "dev": "modern dev",
     "gen:api": "orval --config ./orval.config.ts && node ./scripts/generate-controllers.mjs",
     "lint": "eslint . --max-warnings=0",
@@ -16,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@antv/g2": "^5.4.8",
     "@arco-design/web-react": "^2.66.16",
     "@arms/rum-browser": "^0.1.16",
     "@modern-js/runtime": "^3.5.0",

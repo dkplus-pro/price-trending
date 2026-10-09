@@ -1,0 +1,124 @@
+/* 行情页全局筛选栏(周期 / 日期范围 / 数据源):两页共用,吸顶固定。
+   白底直角条 + 1px 下边框分隔线(卡片化圆角与投影已按需求移除;分隔线改用 border-bottom,
+   吸顶时高度不再随阴影层变化);桌面横向一行,窄屏折行。
+   配色沿用 Arco CSS 变量(见 quote-header.css 同款用法)。 */
+.market-filter-bar {
+  position: sticky;
+  /* 顶栏固定改造后由布局侧提供 --site-header-h(未提供时兜底 0,行为同改造前)。 */
+  top: var(--site-header-h, 0px);
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-border-2, #e5e6eb);
+  background: var(--color-bg-2, #fff);
+}
+
+/* 单组控件:小灰 label + 控件本体。 */
+.market-filter-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.market-filter-label {
+  flex: 0 0 auto;
+  color: var(--color-text-3, #86909c);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* 日期范围包裹层:Tooltip 的触发节点 + 快捷按钮排同行容器(见 market-filter-bar.tsx 注释)。 */
+.market-filter-dates-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 禁用态:指针事件落到包裹层以触发 Tooltip(disabled 控件吞事件),光标仍表意不可用。 */
+.market-filter-dates-wrap-disabled {
+  cursor: not-allowed;
+}
+
+.market-filter-dates-wrap-disabled .arco-picker {
+  pointer-events: none;
+}
+
+/* 日期范围宽度固定,避免值长短变化引起筛选栏抖动。 */
+.market-filter-dates {
+  width: 240px;
+}
+
+/* 快捷跨度:与周期按钮同型(button 单选组)但弱一级(mini 尺寸,不抢日期范围焦点)。 */
+.market-filter-quick {
+  flex: 0 0 auto;
+}
+
+.market-filter-source {
+  width: 160px;
+}
+
+/* 筛选控件直角化:作用域限定在筛选栏内(不外溢其他页面)。
+   实测 DOM 类名(Arco 2.66.16):日期范围根节点 .arco-picker(带 .arco-picker-range)、
+   Select 的输入视图 .arco-select-view、Radio.Group type=button 的项 .arco-radio-button
+   (圆角分别在项自身与首尾项的 ::after 边框上,故一并归零并提高一级选择器特异性)。 */
+.market-filter-bar .arco-picker,
+.market-filter-bar .arco-select-view,
+.market-filter-bar .arco-input,
+.market-filter-bar .arco-input-inner-wrapper,
+.market-filter-bar .arco-radio-group .arco-radio-button,
+.market-filter-bar .arco-radio-group .arco-radio-button::after {
+  border-radius: 0;
+}
+
+/* Portal 弹层(下拉面板 / 日期面板挂载在 body,不受筛选栏作用域约束,故用全局选择器):
+   Arco 默认 medium 圆角 + 投影,同样直角无阴影。body 前缀用于压过 Arco 自身同名单类规则。 */
+body .arco-select-popup,
+body .arco-picker-container,
+body .arco-picker-range-container {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+@media (max-width: 767px) {
+  .market-filter-bar {
+    gap: 10px 16px;
+    padding: 10px 12px;
+  }
+
+  /* 窄屏周期按钮组可占满一行,日期范围与数据源按内容折行。 */
+  .market-filter-field {
+    flex: 1 1 auto;
+  }
+
+  /* 窄屏放不下时快捷按钮排整体折到日期范围下一行。 */
+  .market-filter-dates-wrap {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+  }
+
+  /* 快捷档位(6 档)自身允许收缩与折行:inline-block 的 Arco 按钮组在窄屏一行放不下时
+     会撑破视口(实测 375px 下溢出 20px),故窄屏改为可换行的 flex 容器并允许收缩。 */
+  .market-filter-quick {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .market-filter-dates {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 200px;
+  }
+
+  .market-filter-source {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 120px;
+  }
+}

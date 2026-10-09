@@ -54,11 +54,37 @@ export interface RenderErrorPayload {
   component_stack?: string;
 }
 
+/** market_source_fallback 载荷:行情回落兜底源成功切换(由 src/api/market/index.ts 发出)。 */
+export interface MarketSourceFallbackPayload {
+  /** 标的 id(如 "xau" / "sh000001") */
+  instrument_id: string;
+  /** 取数能力:快照 / K 线 / 分时 */
+  kind: "quote" | "kline" | "trends";
+  /** 原来源(如 "eastmoney") */
+  from: string;
+  /** 兜底来源(如 "tencent" / "gold-api") */
+  to: string;
+}
+
+/** market_data_error 载荷:行情兜底链走完仍无数据(缺失态,null 化占位已返回给 UI)。 */
+export interface MarketDataErrorPayload {
+  /** 标的 id(如 "xau" / "sh000001") */
+  instrument_id: string;
+  /** 取数能力:快照 / K 线 / 分时 */
+  kind: "quote" | "kline" | "trends";
+  /** 最后尝试的来源 */
+  source: string;
+  /** 人话失败原因(含各级失败摘要) */
+  message: string;
+}
+
 export interface TrackingPayloadMap {
   page_view: PageViewPayload;
   web_vitals: WebVitalsPayload;
   api_error: ApiErrorPayload;
   react_render_error: RenderErrorPayload;
+  market_source_fallback: MarketSourceFallbackPayload;
+  market_data_error: MarketDataErrorPayload;
 }
 
 /** 埋点事件名类型(track 的 event 参数),由注册表键派生。 */
@@ -73,7 +99,9 @@ export const TRACKING_EVENTS: Record<TrackingEvent, TrackingEvent> = {
   page_view: "page_view",
   web_vitals: "web_vitals",
   api_error: "api_error",
-  react_render_error: "react_render_error"
+  react_render_error: "react_render_error",
+  market_source_fallback: "market_source_fallback",
+  market_data_error: "market_data_error"
 };
 
 /** web-vitals 回调入参的结构化最小集(兼容 web-vitals 各 Metric 类型,便于单测)。 */

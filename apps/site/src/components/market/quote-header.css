@@ -1,0 +1,108 @@
+/* 快照区块(参考图顶部):左块现价 + 涨跌额/涨跌幅,右块统计网格。
+   配色定稿:涨红跌绿平灰(与 K 线图/成交量柱同一套色);色值以组件级 CSS 变量集中,
+   类名与图表侧无关,改动只影响本区块。 */
+.quote-header {
+  --quote-header-up: #f53f3f;
+  --quote-header-down: #00b42a;
+  --quote-header-flat: #86909c;
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+/* 参考图层级:现价大号,涨跌额/涨跌幅同行基线对齐(小一级),窄屏再折行。 */
+.quote-header-price {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  color: var(--color-text-1);
+}
+
+.quote-header-price-up {
+  color: var(--quote-header-up);
+}
+
+.quote-header-price-down {
+  color: var(--quote-header-down);
+}
+
+.quote-header-price-flat {
+  /* 定稿:flat / 缺失的现价用正文色,不用灰色 #86909c(见 --quote-header-flat 备查)。 */
+  color: var(--color-text-1);
+}
+
+.quote-header-last {
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.quote-header-change {
+  display: flex;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.quote-header-stats {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 24px;
+  margin: 0;
+}
+
+.quote-header-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.quote-header-stat-label {
+  color: var(--color-text-3);
+}
+
+.quote-header-stat-value {
+  margin: 0;
+  color: var(--color-text-1);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quote-header-loading {
+  min-height: 88px;
+}
+
+.quote-header-error {
+  align-items: center;
+  color: var(--color-text-3);
+  font-size: 14px;
+}
+
+@media (max-width: 767px) {
+  .quote-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .quote-header-last {
+    font-size: 28px;
+  }
+
+  .quote-header-change {
+    font-size: 15px;
+  }
+
+  .quote-header-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 16px;
+  }
+}

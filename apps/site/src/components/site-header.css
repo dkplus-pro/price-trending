@@ -1,16 +1,26 @@
+/* 顶部导航栏:固定贴顶、全宽,滚动不随内容移动(高度与内容区让位共用 :root --site-header-h)。
+   border-box:高度含 1px 下分隔线,严格等于让位高度,固定顶栏下沿与内容区对齐。 */
 .site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--site-header-h, 56px);
+  z-index: 100;
   border-bottom: 1px solid var(--color-neutral-3);
   background: #fff;
+  box-sizing: border-box;
 }
 
 .site-header-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 0 16px;
-  height: 56px;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .site-brand {
@@ -29,14 +39,18 @@
   object-fit: contain;
 }
 
-/* 桌面横向菜单铺满右半区,保持 Arco 底部指示线贴住页头下缘。 */
-.site-nav {
-  flex: 1;
-  justify-content: flex-end;
-  border-bottom: none;
-  background: transparent;
-}
-
 .site-mobile-trigger {
   font-size: 20px;
+}
+
+.site-mobile-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.site-mobile-nav-icon {
+  font-size: 16px;
 }

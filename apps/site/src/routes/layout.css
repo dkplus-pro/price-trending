@@ -1,19 +1,53 @@
+/* 壳层尺寸变量(后台式固定布局):顶栏高 / 侧栏宽。
+   内容区让位、侧栏定位、行情筛选栏吸顶偏移共用这两个变量;未定义时各行内均带兜底值。 */
+:root {
+  --site-header-h: 56px;
+  --site-sidebar-w: 200px;
+}
+
 body {
   margin: 0;
 }
 
-/* 整页纵向骨架:页头/页脚固定高度,主内容区撑满剩余视口高度。 */
+/* 整页纵向骨架:顶栏与侧栏均为 fixed(脱离文档流),内容区经 padding-top 让位。
+   box-sizing: border-box 保证 min-height 已含让位高度,整页不因固定顶栏多出滚动。 */
 .site-shell {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  padding-top: var(--site-header-h, 56px);
+  box-sizing: border-box;
 }
 
-.site-main {
+/* 壳层主体:主内容区(< 768px 侧栏不渲染,内容区自然占满)。 */
+.site-body {
+  display: flex;
   flex: 1;
   width: 100%;
-  max-width: 1200px;
+  box-sizing: border-box;
+}
+
+/* 主内容区:内部保留 1400px 居中容器(视觉与旧版一致);
+   纵向 flex + 页脚 margin-top: auto,内容不足一屏时页脚仍落在内容区底部。 */
+.site-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 24px 16px;
   box-sizing: border-box;
+}
+
+/* 页脚随内容流(不固定),位于内容区内。 */
+.site-main > .site-footer {
+  margin-top: auto;
+}
+
+/* 桌面(≥ 768px):内容区左侧让出固定侧栏宽度,内容在剩余区域内居中。 */
+@media (min-width: 768px) {
+  .site-body {
+    padding-left: var(--site-sidebar-w, 200px);
+  }
 }

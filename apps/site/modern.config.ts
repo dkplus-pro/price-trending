@@ -10,6 +10,38 @@ const devServerPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) :
 // 契约路径字面带 /api/site 前缀,开发态原样透传(见 docs/multi-audience-contracts.md)。
 const apiProxyTarget = process.env.API_PROXY_TARGET ?? "http://localhost:8080";
 
+// 生产静态资源前缀 / 路由 basename(GitHub Pages 演示部署以仓库 basePath 优先:
+// GITHUB_PAGES_BASE_PATH 显式传值 > 自动推断,helper 与 admin 同款)。
+// 纯静态导出(SITE_STATIC_EXPORT=true)时:SSR 关闭走 CSR,产物扁平化(basePath 下
+// /gold 这类深链由 404.html 兜底),资源前缀与路由 basename 都要带 basePath。
+// 注意两个规范化方向不同:basename 去尾斜杠(router basename 不接受尾斜杠),
+// assetPrefix 带尾斜杠(静态资源目录拼接)。
+const staticExport = process.env.SITE_STATIC_EXPORT === "true";
+
+const githubPagesBasePath = normalizeGitHubPagesBasePath(
+  process.env.GITHUB_PAGES_BASE_PATH ?? inferGitHubPagesBasePath()
+);
+
+function inferGitHubPagesBasePath() {
+  if (process.env.GITHUB_ACTIONS !== "true" || !process.env.GITHUB_REPOSITORY) {
+    return undefined;
+  }
+
+  const repositoryName = process.env.GITHUB_REPOSITORY.split("/").pop();
+  return repositoryName ? `/${repositoryName}/` : undefined;
+}
+
+function normalizeGitHubPagesBasePath(basePath?: string) {
+  const trimmedBasePath = basePath?.trim();
+  if (!trimmedBasePath || trimmedBasePath === "/") {
+    return undefined;
+  }
+
+  return `/${trimmedBasePath.replace(/^\/+|\/+$/g, "")}/`;
+}
+
+const routerBasename = staticExport ? (githubPagesBasePath?.replace(/\/$/, "") ?? "") : "";
+
 // 生产构建注入 CSP meta(XSS 防御,仅生产注入:dev 的 HMR/内联脚本会被 CSP 破坏,
 // 与 admin 同策略,见 docs/site.md「安全」)。SSR 会内联 loader 数据 script,严格
 // 'self' 会拦内联 script,起步放开 'unsafe-inline';TODO:nonce 化后收紧。
@@ -34,12 +66,32 @@ function reportOrigins(): string[] {
   return origins;
 }
 
+// 行情源域名(行情页由浏览器直连,与部署形态无关,connect-src 无条件放行,见 T1e 卡片)。
+const MARKET_CONNECT_SRC = [
+  "https://push2.eastmoney.com",
+  "https://1.push2.eastmoney.com",
+  "https://82.push2.eastmoney.com",
+  "https://push2delay.eastmoney.com",
+  "https://push2his.eastmoney.com",
+  "https://1.push2his.eastmoney.com",
+  "https://82.push2his.eastmoney.com",
+  "https://push2delayhis.eastmoney.com",
+  "https://web.ifzq.gtimg.cn",
+  "https://ifzq.gtimg.cn",
+  "https://qt.gtimg.cn",
+  "https://proxy.finance.qq.com",
+  "https://api.gold-api.com",
+  // 公共 CORS 代理(东财全域名不可达时的最末端传输层兜底,仅 auto 链使用,见 docs/site.md 行情页小节)
+  "https://api.allorigins.win",
+  "https://api.codetabs.com"
+];
+
 const productionCSP = [
   "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: https:",
   "font-src 'self' data:",
-  `connect-src 'self'${reportOrigins()
+  `connect-src 'self'${MARKET_CONNECT_SRC.map((origin) => ` ${origin}`).join("")}${reportOrigins()
     .map((origin) => ` ${origin}`)
     .join("")}`
 ].join("; ");
@@ -58,6 +110,13 @@ const productionCSPMeta = {
 const rumDefine = {
   "process.env.RUM_PID": JSON.stringify(process.env.RUM_PID ?? ""),
   "process.env.RUM_ENDPOINT": JSON.stringify(process.env.RUM_ENDPOINT ?? "")
+};
+
+// 路由 basename 构建期内联:客户端 bundle 无 Node process,源码里以
+// `process.env.SITE_ROUTER_BASENAME ?? ""` 成员访问写法读(config/router.ts),
+// 构建期替换为字面量;SSR / 根路径部署内联为空串(basename 走框架默认)。
+const routerDefine = {
+  "process.env.SITE_ROUTER_BASENAME": JSON.stringify(routerBasename)
 };
 
 // Arco 按需加载(官方 recipe):组件按 es/<Component> 引入并随带 style,
@@ -108,7 +167,7 @@ const bundleAnalyzePlugin: Rspack.RspackPluginInstance = {
 
 export default defineConfig({
   source: {
-    define: rumDefine,
+    define: { ...rumDefine, ...routerDefine },
     transformImport: arcoTransformImport
   },
   tools: {
@@ -120,13 +179,27 @@ export default defineConfig({
   },
   html: {
     title: "CMS Template",
+    // 纯静态导出:产物扁平化到 dist 根(CSR 只出一份 index.html;basePath 下的
+    // /gold、/indices 深链刷新由 404.html 兜底,见 scripts/copy-404.mjs)。
+    ...(staticExport ? { outputStructure: "flat" as const } : {}),
     ...(process.env.NODE_ENV === "production" ? { meta: productionCSPMeta } : {})
   },
+  // 静态导出的产物位置/资源前缀只在静态导出时出现:非静态(SSR)形态保持框架默认产物结构。
+  ...(staticExport
+    ? {
+        output: {
+          distPath: { html: "" },
+          assetPrefix: githubPagesBasePath ?? "/"
+        }
+      }
+    : {}),
   server: {
     port: devServerPort,
     // SSR 开启后路由模块的 loader(page.data.ts / layout.data.ts)在服务端执行,
     // 数据随 HTML 下发,客户端 hydration 复用(见 docs/site.md「SSR 注意事项」)。
-    ssr: true
+    // 纯静态导出(GitHub Pages)关闭 SSR 走纯 CSR:现有 layout/page 的 loader 在客户端
+    // 执行且已 try/catch 降级 null,静态托管上 /api 快速 404 不会炸页面。
+    ssr: staticExport ? false : true
   },
   dev: {
     server: {

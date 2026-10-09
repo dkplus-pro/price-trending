@@ -1,0 +1,39 @@
+/* K 线/分时图表样式(market-chart-* 命名空间,仅供 kline-chart 使用)。
+   纯展示组件:无滚动/平移交互,容器不需要 touch-action 覆盖。 */
+.market-chart {
+  position: relative;
+  width: 100%;
+}
+
+.market-chart-canvas {
+  width: 100%;
+}
+
+/* 悬停红虚线(overlay):跟随鼠标 y 贯穿图表宽度的一条红色虚线,与 G2 自带的灰色十字光标共存
+   (竖实线定 x、灰横虚线吸附数据点、本虚线跟随鼠标)。top 由组件按指针位置内联下发;
+   涨色复用 instrument-section.css 的定稿变量(该文件注释即声明供图表侧同口径引用),兜底同值。 */
+.market-chart-hoverline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed var(--market-instrument-up, #f53f3f);
+  pointer-events: none;
+  /* 高于 canvas(静态定位的普通流内容),低于下方 loading/空态遮罩。 */
+  z-index: 1;
+}
+
+/* 加载中/空态覆盖层:盖住图表区域并居中提示。z-index 高于悬停线,遮罩期间虚线不可见。 */
+.market-chart-loading,
+.market-chart-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+.market-chart-loading {
+  background: var(--color-bg-2, rgba(255, 255, 255, 0.6));
+}

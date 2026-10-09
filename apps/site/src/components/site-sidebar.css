@@ -1,0 +1,50 @@
+/* 桌面左侧导航(后台式固定侧栏):贴视口左缘(无页面留白、无圆角外边距),
+   上起顶栏下缘、下至视口底(bottom: 0),栏内菜单过长时自身滚动。 */
+.site-sidebar {
+  position: fixed;
+  left: 0;
+  top: var(--site-header-h, 56px);
+  bottom: 0;
+  z-index: 90;
+  width: var(--site-sidebar-w, 200px);
+  overflow-y: auto;
+  background: #fff;
+  border-right: 1px solid var(--color-neutral-3);
+  box-sizing: border-box;
+}
+
+/* 侧栏内菜单去掉 Arco 纵向菜单默认的右侧分隔线,融入侧栏。 */
+.site-sidebar-menu {
+  border-right: none;
+  background: transparent;
+}
+
+/* 菜单内边距归零(仅留纵向):菜单项满宽铺满侧栏,点击区从侧栏左缘直到右缘。 */
+.site-sidebar .site-sidebar-menu.arco-menu-vertical .arco-menu-inner {
+  padding: 8px 0;
+}
+
+/* 菜单项直角贴边、去掉项间距:整行可点(后台式列表手感)。
+   后者选择器 .site-sidebar .arco-menu-* 特意多一层,压过 Arco 同权重的默认圆角与缩进。 */
+.site-sidebar .site-sidebar-menu .arco-menu-item {
+  border-radius: 0;
+  margin-bottom: 0;
+  padding: 0 16px;
+}
+
+/* 选中态左侧高亮条:inset 阴影不参与布局,选中/取消都不会引起文字位移。 */
+.site-sidebar .site-sidebar-menu .arco-menu-item.arco-menu-selected {
+  box-shadow: inset 2px 0 0 rgb(var(--primary-6));
+}
+
+.site-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.site-sidebar-icon {
+  font-size: 16px;
+}

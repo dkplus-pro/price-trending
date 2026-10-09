@@ -1,5 +1,5 @@
 {
-  "$comment": "site 产物体积预算(gzip 字节,基于 dist/static 客户端资产)。超限会令 check:budgets 红灯;确有增量需求时在此调整并在提交说明里写理由。首版预算在阶段 8 以实测基线上浮约 10% 钉定:js gzip 330kB→365、css gzip 12kB→15。",
-  "jsTotalGzipKb": 365,
-  "cssTotalGzipKb": 15
+  "$comment": "site 产物体积预算(gzip 字节,基于 dist/static 客户端资产)。超限会令 check:budgets 红灯;确有增量需求时在此调整并在提交说明里写理由。首版预算在阶段 8 以实测基线上浮约 10% 钉定:js gzip 330kB→365、css gzip 12kB→15。T1c 上调:引入 @antv/g2 行情图表(K线/分时)。G2 虽为动态 import(不落首屏 loader),但 dist/static 统计含异步 chunk,仍全额计入。算法:当时构建实测 333kB(含并行卡页面骨架,尚无图表组件被路由引用)+ G2 隔离实测 397kB(esbuild --bundle --minify @antv/g2/esm/index.js 后 gzip -9 = 406505B),按 (333+397)×1.1 取整得 803。页面接入图表后由验证任务按真实产物钉死。T2 上调 css:行情页接入真实数据后补齐卡片化样式、页面说明小字与页面级错误条,两页路由 CSS 与 market 组件 CSS 一并计入,实测 css gzip 15.62kB(js 实测 724.63kB,仍在 803 内不动),按实测上浮约 10% 取整钉定为 18。T3 收口:js 实测 724.77kB(SSR 构建)/ 740.57kB(静态导出),距 803 不足 15%,维持 803;css 实测 15.62kB(两种构建一致),18 与实测差距超过 15%,按实测×1.1 取整收紧为 17(T2 的 18 保留记录见上文,不再使用)。C 收口(全局筛选栏并入后复测):MarketFilterBar 的 Arco Radio.Group / Select / DatePicker.RangePicker 样式经 transformImport 按需注入,新增一段异步 CSS chunk,实测 css gzip 26.36kB(SSR 与静态导出两种构建一致),17 已不反映最终产物,按实测×1.1 取整上调为 29;js 实测 772kB(SSR)/ 787kB(静态),仍在 803 内,维持 803。",
+  "jsTotalGzipKb": 803,
+  "cssTotalGzipKb": 29
 }

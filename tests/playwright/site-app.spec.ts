@@ -24,10 +24,13 @@ test.describe("SSR 硬证据", () => {
 });
 
 test.describe("响应式双端冒烟", () => {
-  test("桌面视口渲染横向导航,无汉堡按钮", async ({ page }) => {
+  test("桌面视口渲染左侧导航,无汉堡按钮", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
-    await expect(page.locator(".site-nav")).toBeVisible();
+    // 桌面导航已由页头横向条改为左侧栏(.site-sidebar,见 components/site-sidebar.tsx)。
+    const sidebar = page.locator(".site-sidebar");
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "黄金价格" })).toBeVisible();
     await expect(page.getByRole("button", { name: "打开导航" })).toHaveCount(0);
   });
 

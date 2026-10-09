@@ -1,0 +1,6 @@
+{
+  "_note": "手工构造的异常响应(非实测):data 为 null(东财非法 secid 的真实形态见 tests/market/fixtures/eastmoney/trends-data-null.json),验证「整体结构变形 → 返回空数组不抛异常」。",
+  "rc": 0,
+  "rt": 11,
+  "data": null
+}

@@ -34,8 +34,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build admin for GitHub Pages
+      - name: Build site for GitHub Pages
         env:
+          GITHUB_PAGES_APP_FILTER: "@monorepo-template/site"
+          GITHUB_PAGES_APP_DIR: "apps/site"
+          GITHUB_PAGES_ARTIFACT_DIR: "apps/site/dist"
           GITHUB_PAGES_BASE_PATH: /${{ github.event.repository.name }}
         run: pnpm run build:pages
 
@@ -45,7 +48,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: apps/admin/dist
+          path: apps/site/dist
 
   deploy:
     name: Deploy Pages
