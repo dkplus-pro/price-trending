@@ -1,4 +1,4 @@
-// 东方财富行情源(主源):批量快照 / K 线 / 分时。
+// 东方财富行情源(直连源):批量快照 / K 线 / 分时。
 //
 // 接口参数与字段映射为 2026-10-09 curl 实测固化(勿凭印象改动):
 // - 端口分工:快照在实时行情域(push2),K 线 / 分时在历史行情域(push2his),两者不互通;
@@ -15,14 +15,18 @@
 //
 // 实现约束:
 // - 所有真实请求由调用方(facade 经调度器)注入 host,源内不自建并发 / 重试 / 轮换;
-// - host 可能是裸域名(facade 的直连域名池即 "push2.eastmoney.com" 形式)或带 scheme 的完整前缀,
+// - host 是裸域名(facade 的直连域名池即 "push2.eastmoney.com" 形式)或带 scheme 的完整前缀,
 //   一律经 resolveBaseUrl 归一(缺 scheme 补 https://),缺省用源内默认主域;
-// - host 还可能是公共 CORS 代理项:以 "proxy:" 前缀 + 带 {url} 占位符的模板标记(facade 域名池
-//   垫底项),本层把「默认主域 + path + query」拼成完整东财 URL 后 encodeURIComponent 替换进模板;
-// - 请求一律走 throttle.fetchJson(直连 10s / 代理 15s 超时);网络层失败(fetchJson reject:
-//   超时 / 非 2xx / 坏 JSON,含代理返回 HTML 错误页)原样透传,由 facade 的兜底链决定下一步;
+// - 请求一律走 throttle.fetchJson(10s 超时);网络层失败(fetchJson reject:超时 / 非 2xx /
+//   坏 JSON)原样透传,由 facade 的兜底链决定下一步;本机 / 部分网络直连东财全域会被 WAF
+//   按出口 IP 限流(HTTP 000,诊断记录见 apps/server/internal/service/market.go 头注释),
+//   该场景由主源 server 转发(sources/server.ts)以服务器出口 IP 代取——曾经的公共 CORS
+//   代理传输层(2026-10-09 实测 allorigins / codetabs 等候选全部不可用)已整体移除;
 // - 解析防御:响应整体结构变形视为「无数据」返回空结果(不抛异常,让 facade 继续兜底);
-//   可空字段非法一律 null,不抛错。
+//   可空字段非法一律 null,不抛错;
+// - 解析与取数拆分:三个纯解析函数(parseQuotePayload / parseKlinePayload / parseTrendsPayload,
+//   输入为上游 JSON 对象)单独导出,供 server 转发源(sources/server.ts)复用——server 端点
+//   原样透传东财上游 JSON,数据形态与直连完全一致,解析路径必须共用;本文件的取数逻辑不变。
 import { DEFAULT_KLINE_LIMIT } from "../config";
 import { fetchJson } from "../throttle";
 import type {
@@ -41,11 +45,6 @@ import type {
 const DEFAULT_QUOTE_HOST = "https://push2.eastmoney.com";
 /** K 线 / 分时默认主域(历史行情域)。 */
 const DEFAULT_KLINE_HOST = "https://push2his.eastmoney.com";
-
-/** 公共 CORS 代理 host 的前缀标记:其后是带 {url} 占位符的模板(域名池见 facade 的 index.ts)。 */
-const PROXY_HOST_PREFIX = "proxy:";
-/** 代理请求超时:公共代理多一跳转发,给足 15s(直连沿用 fetchJson 缺省的 10s)。 */
-const PROXY_TIMEOUT_MS = 15_000;
 
 /** K 线周期 → 东财 klt(101 日 / 102 周 / 103 月)。 */
 const KLT_BY_PERIOD: Record<KlinePeriod, number> = { day: 101, week: 102, month: 103 };
@@ -77,34 +76,14 @@ function resolveBaseUrl(host: string | undefined, fallback: string): string {
   return withScheme.endsWith("/") ? withScheme.slice(0, -1) : withScheme;
 }
 
-/** 是否公共 CORS 代理 host("proxy:" 前缀,见文件头);类型谓词收窄后可直接降级。 */
-function isProxyHost(host: string | undefined): host is string {
-  return host !== undefined && host.startsWith(PROXY_HOST_PREFIX);
-}
-
-/**
- * host + 端点 → 请求 URL。
- * - 直连 host:归一为 base URL 后拼 path + query(缺省用 defaultHost);
- * - 代理 host("proxy:" + 模板):先把「defaultHost + path + query」拼成完整东财 URL,
- *   再 encodeURIComponent 后替换进模板的 {url} 占位符(响应体即东财原 JSON,解析路径相同)。
- */
+/** host + 端点 → 请求 URL:归一为 base URL 后拼 path + query(缺省用 defaultHost)。 */
 function buildRequestUrl(
   host: string | undefined,
   defaultHost: string,
   path: string,
   query: string
 ): string {
-  if (isProxyHost(host)) {
-    const template = host.slice(PROXY_HOST_PREFIX.length);
-    const target = `${resolveBaseUrl(undefined, defaultHost)}${path}?${query}`;
-    return template.replace("{url}", encodeURIComponent(target));
-  }
   return `${resolveBaseUrl(host, defaultHost)}${path}?${query}`;
-}
-
-/** 请求超时:代理 host 多一跳转发给足 15s;直连返回 undefined 用 fetchJson 缺省 10s。 */
-function requestTimeoutMs(host: string | undefined): number | undefined {
-  return isProxyHost(host) ? PROXY_TIMEOUT_MS : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -200,6 +179,18 @@ function toQuote(instrumentId: string, entry: Record<string, unknown>): Quote {
 }
 
 /**
+ * 快照响应解析(diff[] → Quote[]):对账回入参标的;结构变形视为无数据返回空数组。
+ * 导出供 server 转发源复用(server 端点透传的即此形态的上游 JSON)。
+ */
+export function parseQuotePayload(payload: unknown, insts: InstrumentConfig[]): Quote[] {
+  const diff = readDataArray(payload, "diff");
+  if (diff === null) {
+    return [];
+  }
+  return matchDiffToInstruments(diff, insts).map(({ inst, entry }) => toQuote(inst.id, entry));
+}
+
+/**
  * 批量快照(单请求多 secid)。
  * @param insts 待取标的;实现可自行拼 secid 列表(如 "118.AU9999,1.000001")
  * @param host 调度器轮换出的域名;缺省用源内默认域名
@@ -215,12 +206,8 @@ export async function fetchQuotes(insts: InstrumentConfig[], host?: string): Pro
     "/api/qt/ulist.np/get",
     `secids=${secids}&fields=${QUOTE_FIELDS}&fltt=2&invt=2`
   );
-  const payload = await fetchJson<unknown>(url, requestTimeoutMs(host));
-  const diff = readDataArray(payload, "diff");
-  if (diff === null) {
-    return [];
-  }
-  return matchDiffToInstruments(diff, insts).map(({ inst, entry }) => toQuote(inst.id, entry));
+  const payload = await fetchJson<unknown>(url);
+  return parseQuotePayload(payload, insts);
 }
 
 /**
@@ -258,6 +245,37 @@ function parseKlineBar(raw: unknown): KlineBar | null {
 }
 
 /**
+ * K 线响应解析(data.klines[] → KlinePage):升序排序;范围查询(rangeBeg 非空)原样返回、
+ * 不判分页;否则按「保留最近 limit 根」切片并判定 hasMore。导出供 server 转发源复用。
+ * @param rangeBeg 范围查询起点(取数侧已归一:空串 / 缺省为 null,即未启用范围查询)
+ * @param limit 单页条数(取数侧已按 range.limit ?? DEFAULT_KLINE_LIMIT 归一)
+ */
+export function parseKlinePayload(
+  payload: unknown,
+  rangeBeg: string | null,
+  limit: number
+): KlinePage {
+  const klines = readDataArray(payload, "klines");
+  if (klines === null) {
+    return { bars: [], hasMore: false };
+  }
+  const parsed = klines.map(parseKlineBar).filter((bar): bar is KlineBar => bar !== null);
+  // 源按日期升序返回,但契约要求升序,这里显式排序以防乱序输入。
+  parsed.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+  // 范围查询:请求已按区间限定(见 types.ts 的 KlineRange),原样返回、不判分页。
+  if (rangeBeg !== null) {
+    return { bars: parsed, hasMore: false };
+  }
+  // 条数兜底:lmt 语义为「最近 N 根」,但本环境该端点被源拒绝(HTTP 000),无法二次实测确认;
+  // 若源忽略 lmt(或忽略 end 之后的截断),这里按「保留最近 limit 根」切片,保证 hasMore 与分页语义一致。
+  const bars =
+    Number.isInteger(limit) && limit > 0 && parsed.length > limit
+      ? parsed.slice(parsed.length - limit)
+      : parsed;
+  return { bars, hasMore: bars.length === limit };
+}
+
+/**
  * 日/周/月 K 线(东财 kline 端点)。
  * @param range beg 存在时按 [beg, end] 范围取数(beg 原样透传、lmt 固定 5000,不按 limit 截断、
  *              hasMore 恒 false);否则维持 beg=0 + lmt=limit 的「最近 limit 根」语义
@@ -280,25 +298,8 @@ export async function fetchKlines(
     `secid=${inst.secid}&fields1=${KLINE_FIELDS1}&fields2=${KLINE_FIELDS2}&klt=${KLT_BY_PERIOD[period]}` +
       `&fqt=0&beg=${rangeBeg ?? "0"}&end=${end}&lmt=${rangeBeg === null ? limit : RANGE_KLINE_LMT}`
   );
-  const payload = await fetchJson<unknown>(url, requestTimeoutMs(host));
-  const klines = readDataArray(payload, "klines");
-  if (klines === null) {
-    return { bars: [], hasMore: false };
-  }
-  const parsed = klines.map(parseKlineBar).filter((bar): bar is KlineBar => bar !== null);
-  // 源按日期升序返回,但契约要求升序,这里显式排序以防乱序输入。
-  parsed.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-  // 范围查询:请求已按区间限定(见 types.ts 的 KlineRange),原样返回、不判分页。
-  if (rangeBeg !== null) {
-    return { bars: parsed, hasMore: false };
-  }
-  // 条数兜底:lmt 语义为「最近 N 根」,但本环境该端点被源拒绝(HTTP 000),无法二次实测确认;
-  // 若源忽略 lmt(或忽略 end 之后的截断),这里按「保留最近 limit 根」切片,保证 hasMore 与分页语义一致。
-  const bars =
-    Number.isInteger(limit) && limit > 0 && parsed.length > limit
-      ? parsed.slice(parsed.length - limit)
-      : parsed;
-  return { bars, hasMore: bars.length === limit };
+  const payload = await fetchJson<unknown>(url);
+  return parseKlinePayload(payload, rangeBeg, limit);
 }
 
 /**
@@ -332,6 +333,22 @@ function parseTrendPoint(raw: unknown): TrendPoint | null {
 }
 
 /**
+ * 分时响应解析(data.trends[] + data.preClose → TrendSet):保持源返回顺序(跨日分组交给渲染层)。
+ * 导出供 server 转发源复用(含伦敦金/COMEX 的 hf_ 外盘——server 端照请求东财 trends2)。
+ */
+export function parseTrendsPayload(payload: unknown): TrendSet {
+  const prevClose =
+    isRecord(payload) && isRecord(payload.data) ? toNumber(payload.data.preClose) : null;
+  const trends = readDataArray(payload, "trends");
+  if (trends === null) {
+    return { points: [], prevClose };
+  }
+  const points = trends.map(parseTrendPoint).filter((point): point is TrendPoint => point !== null);
+  // 五日数据保持源返回顺序(跨日分组交给渲染层),此处不排序。
+  return { points, prevClose };
+}
+
+/**
  * 分时(1 日 / 5 日,东财 trends 端点)。
  * @param ndays 1=当日分时,5=五日分时
  * @param host 调度器轮换出的域名;缺省用源内默认域名
@@ -347,14 +364,6 @@ export async function fetchTrends(
     "/api/qt/stock/trends2/get",
     `secid=${inst.secid}&fields1=${TRENDS_FIELDS1}&fields2=${TRENDS_FIELDS2}&ndays=${ndays}&iscr=0`
   );
-  const payload = await fetchJson<unknown>(url, requestTimeoutMs(host));
-  const prevClose =
-    isRecord(payload) && isRecord(payload.data) ? toNumber(payload.data.preClose) : null;
-  const trends = readDataArray(payload, "trends");
-  if (trends === null) {
-    return { points: [], prevClose };
-  }
-  const points = trends.map(parseTrendPoint).filter((point): point is TrendPoint => point !== null);
-  // 五日数据保持源返回顺序(跨日分组交给渲染层),此处不排序。
-  return { points, prevClose };
+  const payload = await fetchJson<unknown>(url);
+  return parseTrendsPayload(payload);
 }

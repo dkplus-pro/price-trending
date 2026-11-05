@@ -14,11 +14,12 @@ import (
 type SiteHandler struct {
 	logger  *slog.Logger
 	configs *service.ConfigService
+	market  *service.MarketService
 }
 
-// New 构造 SiteHandler。
-func New(logger *slog.Logger, configs *service.ConfigService) *SiteHandler {
-	return &SiteHandler{logger: logger, configs: configs}
+// New 构造 SiteHandler(market 行情转发服务可空:仅行情端点使用)。
+func New(logger *slog.Logger, configs *service.ConfigService, market *service.MarketService) *SiteHandler {
+	return &SiteHandler{logger: logger, configs: configs, market: market}
 }
 
 // ensureSiteGen 编译期校验:SiteHandler 实现生成物的 ServerInterface。

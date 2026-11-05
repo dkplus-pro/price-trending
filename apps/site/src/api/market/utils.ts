@@ -1,5 +1,6 @@
-// 行情层纯函数:格式化 / 均线 / 日期位移 / 涨跌分类。
+// 行情层纯函数:格式化 / 均线 / 日期位移 / 涨跌分类 / 日 K 周·月聚合。
 // 全部无副作用、不触网,便于单测;数值缺失(null / 非有限数)统一显示 "--"。
+import type { KlineBar } from "./types";
 
 /** 缺失值占位文案(UI 统一口径)。 */
 export const MISSING_TEXT = "--";
@@ -173,4 +174,128 @@ export function classifyTrend(open: number, close: number): "up" | "down" | "fla
     return "down";
   }
   return "flat";
+}
+
+/** "YYYY-MM-DD"(新源 PAXG / SGE 的 bar.time 体例);旧源东财为 "YYYY-MM-DD HH:mm"。 */
+const DASH_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** "YYYY-MM-DD" → 当日 UTC 零点毫秒;格式不符返回 null(调用方跳过该根,不静默造桶)。 */
+function dashDateToUtcMs(time: string): number | null {
+  const matched = DASH_DATE.exec(time);
+  if (matched === null) {
+    return null;
+  }
+  return Date.UTC(Number(matched[1]), Number(matched[2]) - 1, Number(matched[3]));
+}
+
+/** UTC 毫秒 → "YYYY-MM-DD"(getUTC* 读回,勿用本地时区,与桶键口径一致)。 */
+function utcMsToDashDate(ms: number): string {
+  const date = new Date(ms);
+  const pad = (part: number): string => String(part).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+/** 桶内聚合的中间形态:volume/amount 逐行收集后统一求和(首根行也要进桶)。 */
+interface DailyBarBucket {
+  key: string;
+  /** 桶首根的 time(桶的展示时间,取首根而非周一/月初)。 */
+  time: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+  volumes: (number | null)[];
+  amounts: (number | null)[];
+}
+
+/** 聚合求和:只累加有限数,null / NaN 不进和;全缺失返回 null(不冒充 0)。 */
+function sumNullable(values: (number | null)[]): number | null {
+  let sum = 0;
+  let count = 0;
+  for (const value of values) {
+    if (value !== null && Number.isFinite(value)) {
+      sum += value;
+      count += 1;
+    }
+  }
+  return count === 0 ? null : sum;
+}
+
+/** 定点两位四舍五入(振幅推导值用):消化二进制浮点尾差(如 1.6500000000000001 → 1.65)。 */
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** bar.time → 桶键:week 为本周周一的 "YYYY-MM-DD"(ISO 周,周一为界);month 为 "YYYY-MM"。 */
+function bucketKey(time: string, period: "week" | "month"): string | null {
+  const utcMs = dashDateToUtcMs(time);
+  if (utcMs === null) {
+    return null;
+  }
+  if (period === "month") {
+    return time.slice(0, 7);
+  }
+  // ISO 周:回退到本周周一(周一为界;周日 getUTCDay()=6 → 偏移 6 天回退),
+  // UTC 毫秒运算跨月/跨年由 Date 进位保证正确,不用本地时区避免周界漂移。
+  const offsetDays = (new Date(utcMs).getUTCDay() + 6) % 7;
+  return utcMsToDashDate(utcMs - offsetDays * MS_PER_DAY);
+}
+
+/**
+ * 日 K → 周/月 K 客户端聚合(上金所源仅提供日 K,周/月线由此派生)。
+ *
+ * 桶边界:week 按 ISO 周(周一为界,UTC 安全计算,见 bucketKey);month 按自然月(YYYY-MM)。
+ * 桶内归并:open=首根 open、close=末根 close、high=max、low=min、volume/amount=求和
+ * (null/非有限数不进和,全缺失为 null)、time=桶首根的 time(非周一/月初,保留桶内首个交易日);
+ * amplitudePct=按前桶 close 现算((high-low)/prevClose×100,保留两位;首桶无前收 → null,
+ * 前收 0/非有限数 → null,不产生 Infinity)。
+ *
+ * 假定入参按时间升序(调用方——SGE 源返回升序全量——满足;升序下同桶行必然连续);
+ * time 非 "YYYY-MM-DD" 的行跳过(防御:不静默造桶)。空数组 → []。
+ */
+export function aggregateDailyBars(bars: KlineBar[], period: "week" | "month"): KlineBar[] {
+  const buckets: DailyBarBucket[] = [];
+  let current: DailyBarBucket | null = null;
+  for (const bar of bars) {
+    const key = bucketKey(bar.time, period);
+    if (key === null) {
+      continue;
+    }
+    if (current === null || current.key !== key) {
+      current = {
+        key,
+        time: bar.time,
+        open: bar.open,
+        close: bar.close,
+        high: bar.high,
+        low: bar.low,
+        volumes: [],
+        amounts: []
+      };
+      buckets.push(current);
+    } else {
+      current.close = bar.close;
+      current.high = Math.max(current.high, bar.high);
+      current.low = Math.min(current.low, bar.low);
+    }
+    current.volumes.push(bar.volume);
+    current.amounts.push(bar.amount);
+  }
+  return buckets.map((bucket, index) => {
+    const prevClose = index === 0 ? null : buckets[index - 1].close;
+    const amplitudePct =
+      prevClose !== null && Number.isFinite(prevClose) && prevClose !== 0
+        ? round2(((bucket.high - bucket.low) / prevClose) * 100)
+        : null;
+    return {
+      time: bucket.time,
+      open: bucket.open,
+      close: bucket.close,
+      high: bucket.high,
+      low: bucket.low,
+      volume: sumNullable(bucket.volumes),
+      amount: sumNullable(bucket.amounts),
+      amplitudePct
+    };
+  });
 }

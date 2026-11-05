@@ -1,9 +1,9 @@
 // 东财源适配器单测:mock 全局 fetch(fetchJson 的底层),用真实响应 fixture 驱动解析,
 // 覆盖六类边界:空值(空数组/空 secids)、零值(price=0 保留、量/均价为 0、振幅 0 保留)、
 // 越界(段数不足跳过、振幅段缺失/非法 → null)、配置缺失(入参为空不发请求)、
-// 网络失败(fetchJson reject 透传)、非法状态(结构变形 → 空数据;代理返回 HTML 错误页 → 非 JSON 抛错)。
-// 公共 CORS 代理 host("proxy:" 前缀):URL 构建(完整东财 URL 编码进 {url} 模板)、响应同解析、
-// 15s 超时(直连 10s)见文末「公共 CORS 代理 host」一组。
+// 网络失败(fetchJson reject 透传)、非法状态(结构变形 → 空数据)。
+// 公共 CORS 代理传输层已整体移除(东财全域不可达的场景由 server 转发主源承接,
+// 见 sources/server.ts 与 docs/site.md),直连 hosts 池仅保留东财域名。
 //
 // fixture 说明(见 fixtures/eastmoney/ 各文件头的 _note):
 // - 实测响应(2026-10-09 curl):ulist-secid-echo / trends-1d / trends-5d-boundary / trends-data-null;
@@ -561,119 +561,6 @@ describe("fetchTrends 分时", () => {
     );
 
     await expect(fetchTrends(instOf("sh000001")[0], 1)).rejects.toBe(networkError);
-  });
-});
-
-describe("公共 CORS 代理 host(proxy: 前缀)", () => {
-  const ALLORIGINS_TEMPLATE = "proxy:https://api.allorigins.win/raw?url={url}";
-  const CODETABS_TEMPLATE = "proxy:https://api.codetabs.com/v1/proxy?quest={url}";
-
-  it("fetchQuotes:目标为完整东财快照 URL(push2 主域),encodeURIComponent 后填入 {url}", async () => {
-    // 先取直连 URL 作对照:代理的目标就是同一串完整 URL(响应体即东财原 JSON)。
-    const directMock = stubJsonFetch(ulistSecidEcho);
-    await fetchQuotes(instOf("au9999"), QUOTE_HOST);
-    const directUrl = firstUrl(directMock);
-    vi.unstubAllGlobals();
-
-    const proxyMock = stubJsonFetch(ulistSecidEcho);
-    await fetchQuotes(instOf("au9999"), ALLORIGINS_TEMPLATE);
-
-    expect(firstUrl(proxyMock)).toBe(
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(directUrl)}`
-    );
-    // 整串被编码:目标里的参数分隔符不能裸出现在代理 URL 中(? → %3F,& → %26)。
-    expect(firstUrl(proxyMock)).not.toContain("&secids=");
-    expect(firstUrl(proxyMock)).not.toContain("/api/qt/ulist.np/get?");
-  });
-
-  it("fetchKlines / fetchTrends:代理目标用 push2his 历史行情域,换模板(quest=)同样替换", async () => {
-    const klineDirect = stubJsonFetch(klineDayLmt5);
-    await fetchKlines(instOf("au9999")[0], "day", { limit: 5 }, KLINE_HOST);
-    const klineUrl = firstUrl(klineDirect);
-    vi.unstubAllGlobals();
-
-    const klineProxy = stubJsonFetch(klineDayLmt5);
-    await fetchKlines(instOf("au9999")[0], "day", { limit: 5 }, CODETABS_TEMPLATE);
-    expect(firstUrl(klineProxy)).toBe(
-      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(klineUrl)}`
-    );
-    expect(klineUrl.startsWith(`${KLINE_HOST}/api/qt/stock/kline/get?`)).toBe(true);
-
-    const trendsDirect = stubJsonFetch(trends1d);
-    await fetchTrends(instOf("au9999")[0], 5, KLINE_HOST);
-    const trendsUrl = firstUrl(trendsDirect);
-    vi.unstubAllGlobals();
-
-    const trendsProxy = stubJsonFetch(trends1d);
-    await fetchTrends(instOf("au9999")[0], 5, ALLORIGINS_TEMPLATE);
-    expect(firstUrl(trendsProxy)).toBe(
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(trendsUrl)}`
-    );
-  });
-
-  it("代理响应正常解析:实测响应对解析结果与直连完全一致", async () => {
-    const insts = instOf("au9999", "sh000001", "xau", "gc");
-    stubJsonFetch(ulistSecidEcho);
-    const viaDirect = await fetchQuotes(insts, QUOTE_HOST);
-    vi.unstubAllGlobals();
-
-    stubJsonFetch(ulistSecidEcho);
-    const viaProxy = await fetchQuotes(insts, ALLORIGINS_TEMPLATE);
-
-    expect(viaProxy).toEqual(viaDirect);
-    expect(viaProxy[0]).toMatchObject({ instrumentId: "sh000001", price: 3813.79 });
-    expect(viaProxy[2]).toMatchObject({ instrumentId: "xau", price: 4191.93 });
-  });
-
-  it("代理返回 HTML 错误页(响应体非 JSON)→ 抛「响应不是合法 JSON」原样透传", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => {
-            throw new SyntaxError("Unexpected token '<'");
-          }
-        } as unknown as Response;
-      })
-    );
-
-    await expect(fetchKlines(instOf("au9999")[0], "day", {}, ALLORIGINS_TEMPLATE)).rejects.toThrow(
-      /响应不是合法 JSON/
-    );
-  });
-
-  it("代理 host 超时给到 15s(直连 10s):10s 时未中止、15s 时中止并抛超时", async () => {
-    vi.useFakeTimers();
-    const signals: AbortSignal[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        (_url: string, init: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            const signal = init.signal as AbortSignal;
-            signals.push(signal);
-            signal.addEventListener("abort", () => {
-              reject(new Error("aborted"));
-            });
-          })
-      )
-    );
-
-    const settled = fetchTrends(instOf("au9999")[0], 1, ALLORIGINS_TEMPLATE).then(
-      () => null,
-      (error: unknown) => error as Error
-    );
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(signals[0].aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(signals[0].aborted).toBe(true);
-
-    const error = await settled;
-    expect(error).toBeInstanceOf(Error);
-    expect(error?.message).toContain("请求超时(15000ms)");
-    vi.useRealTimers();
   });
 });
 

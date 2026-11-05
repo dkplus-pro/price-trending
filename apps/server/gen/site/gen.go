@@ -8,7 +8,43 @@ package site
 import (
 	"fmt"
 	"net/http"
+
+	"github.com/oapi-codegen/runtime"
 )
+
+// Defines values for GetMarketKlineParamsKlt.
+const (
+	N101 GetMarketKlineParamsKlt = 101
+	N102 GetMarketKlineParamsKlt = 102
+	N103 GetMarketKlineParamsKlt = 103
+)
+
+// Defines values for GetMarketKlineParamsFqt.
+const (
+	GetMarketKlineParamsFqtN0 GetMarketKlineParamsFqt = 0
+	GetMarketKlineParamsFqtN1 GetMarketKlineParamsFqt = 1
+)
+
+// Defines values for GetMarketTrendsParamsNdays.
+const (
+	GetMarketTrendsParamsNdaysN1 GetMarketTrendsParamsNdays = 1
+	GetMarketTrendsParamsNdaysN5 GetMarketTrendsParamsNdays = 5
+)
+
+// Error defines model for Error.
+type Error struct {
+	// Code HTTP 状态码
+	Code int `json:"code"`
+
+	// Message 错误描述
+	Message string `json:"message"`
+}
+
+// MarketSgeUpstreamPayload 上金所官网 Dailyhq 原始响应体(如 {"time":[[日期,开,收,低,高],...]}),服务端原样透传,不做结构化承诺
+type MarketSgeUpstreamPayload map[string]interface{}
+
+// MarketUpstreamPayload 东方财富行情接口原始响应体,结构随上游(服务端原样透传,不做结构化承诺)
+type MarketUpstreamPayload map[string]interface{}
 
 // SiteInfo defines model for SiteInfo.
 type SiteInfo struct {
@@ -17,8 +53,77 @@ type SiteInfo struct {
 	SiteName string `json:"siteName"`
 }
 
+// MarketInvalidParam defines model for MarketInvalidParam.
+type MarketInvalidParam = Error
+
+// MarketUpstreamUnavailable defines model for MarketUpstreamUnavailable.
+type MarketUpstreamUnavailable = Error
+
+// GetMarketKlineParams defines parameters for GetMarketKline.
+type GetMarketKlineParams struct {
+	// Secid 证券代码,市场号.代码(如 1.000001、118.AU9999)
+	Secid string `form:"secid" json:"secid"`
+
+	// Klt K 线周期(101 日线/102 周线/103 月线,缺省 101)
+	Klt *GetMarketKlineParamsKlt `form:"klt,omitempty" json:"klt,omitempty"`
+
+	// Fqt 复权方式(0 不复权/1 前复权,缺省 1)
+	Fqt *GetMarketKlineParamsFqt `form:"fqt,omitempty" json:"fqt,omitempty"`
+
+	// Beg 开始日期 YYYYMMDD(缺省 19700101)
+	Beg *string `form:"beg,omitempty" json:"beg,omitempty"`
+
+	// End 结束日期 YYYYMMDD(缺省 20991231)
+	End *string `form:"end,omitempty" json:"end,omitempty"`
+
+	// Lmt 返回条数上限(缺省 120)
+	Lmt *int `form:"lmt,omitempty" json:"lmt,omitempty"`
+}
+
+// GetMarketKlineParamsKlt defines parameters for GetMarketKline.
+type GetMarketKlineParamsKlt int
+
+// GetMarketKlineParamsFqt defines parameters for GetMarketKline.
+type GetMarketKlineParamsFqt int
+
+// GetMarketQuoteParams defines parameters for GetMarketQuote.
+type GetMarketQuoteParams struct {
+	// Secids 证券代码列表,逗号分隔,市场号.代码(如 1.000001,118.AU9999)
+	Secids string `form:"secids" json:"secids"`
+}
+
+// GetMarketSgeDailyParams defines parameters for GetMarketSgeDaily.
+type GetMarketSgeDailyParams struct {
+	// Instid 上金所合约代码(如 Au99.99)。pattern 保守限定 Au 前缀数字合约(Au99.99/Au99.95 等); 上金所另有 Au(T+D)、Au100g 等命名风格,确有需要再放宽 pattern,避免透传任意串
+	Instid string `form:"instid" json:"instid"`
+}
+
+// GetMarketTrendsParams defines parameters for GetMarketTrends.
+type GetMarketTrendsParams struct {
+	// Secid 证券代码,市场号.代码(如 1.000001、118.AU9999)
+	Secid string `form:"secid" json:"secid"`
+
+	// Ndays 走势天数(1 分时/5 五日,缺省 1)
+	Ndays *GetMarketTrendsParamsNdays `form:"ndays,omitempty" json:"ndays,omitempty"`
+}
+
+// GetMarketTrendsParamsNdays defines parameters for GetMarketTrends.
+type GetMarketTrendsParamsNdays int
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// K 线查询(服务端转发东方财富行情接口,带缓存)
+	// (GET /api/site/market/kline)
+	GetMarketKline(w http.ResponseWriter, r *http.Request, params GetMarketKlineParams)
+	// 行情快照批量查询(服务端转发东方财富行情接口,带缓存)
+	// (GET /api/site/market/quote)
+	GetMarketQuote(w http.ResponseWriter, r *http.Request, params GetMarketQuoteParams)
+	// 上金所日线查询(服务端转发上金所官网 Dailyhq 接口,带缓存)
+	// (GET /api/site/market/sge-daily)
+	GetMarketSgeDaily(w http.ResponseWriter, r *http.Request, params GetMarketSgeDailyParams)
+	// 分时/五日走势(服务端转发东方财富行情接口,带缓存)
+	// (GET /api/site/market/trends)
+	GetMarketTrends(w http.ResponseWriter, r *http.Request, params GetMarketTrendsParams)
 	// 站点公开信息(站名、Logo 等,来自 admin 系统配置)
 	// (GET /api/site/site-info)
 	GetSiteInfo(w http.ResponseWriter, r *http.Request)
@@ -32,6 +137,190 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// GetMarketKline operation middleware
+func (siw *ServerInterfaceWrapper) GetMarketKline(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetMarketKlineParams
+
+	// ------------- Required query parameter "secid" -------------
+
+	if paramValue := r.URL.Query().Get("secid"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "secid"})
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "secid", r.URL.Query(), &params.Secid)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secid", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "klt" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "klt", r.URL.Query(), &params.Klt)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "klt", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "fqt" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "fqt", r.URL.Query(), &params.Fqt)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fqt", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "beg" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "beg", r.URL.Query(), &params.Beg)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "beg", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "end" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "end", r.URL.Query(), &params.End)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "end", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "lmt" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "lmt", r.URL.Query(), &params.Lmt)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "lmt", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMarketKline(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMarketQuote operation middleware
+func (siw *ServerInterfaceWrapper) GetMarketQuote(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetMarketQuoteParams
+
+	// ------------- Required query parameter "secids" -------------
+
+	if paramValue := r.URL.Query().Get("secids"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "secids"})
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "secids", r.URL.Query(), &params.Secids)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secids", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMarketQuote(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMarketSgeDaily operation middleware
+func (siw *ServerInterfaceWrapper) GetMarketSgeDaily(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetMarketSgeDailyParams
+
+	// ------------- Required query parameter "instid" -------------
+
+	if paramValue := r.URL.Query().Get("instid"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "instid"})
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "instid", r.URL.Query(), &params.Instid)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "instid", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMarketSgeDaily(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMarketTrends operation middleware
+func (siw *ServerInterfaceWrapper) GetMarketTrends(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetMarketTrendsParams
+
+	// ------------- Required query parameter "secid" -------------
+
+	if paramValue := r.URL.Query().Get("secid"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "secid"})
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "secid", r.URL.Query(), &params.Secid)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secid", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "ndays" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "ndays", r.URL.Query(), &params.Ndays)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "ndays", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMarketTrends(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetSiteInfo operation middleware
 func (siw *ServerInterfaceWrapper) GetSiteInfo(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +456,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc("GET "+options.BaseURL+"/api/site/market/kline", wrapper.GetMarketKline)
+	m.HandleFunc("GET "+options.BaseURL+"/api/site/market/quote", wrapper.GetMarketQuote)
+	m.HandleFunc("GET "+options.BaseURL+"/api/site/market/sge-daily", wrapper.GetMarketSgeDaily)
+	m.HandleFunc("GET "+options.BaseURL+"/api/site/market/trends", wrapper.GetMarketTrends)
 	m.HandleFunc("GET "+options.BaseURL+"/api/site/site-info", wrapper.GetSiteInfo)
 
 	return m

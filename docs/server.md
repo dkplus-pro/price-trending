@@ -66,6 +66,17 @@ Go 不归 pnpm 管,但为了根目录一条命令跑起整个项目,server 通�
 - 本地调试用 Swagger UI:`httpapi.RegisterSwagger` 在 root mux 挂 UI 与 4 份契约(admin/site/app/h5,spec 路径由 `cfg.Swagger` 配置),列表与下载不经过受众中间件链;
 - 生成物不手改;契约变更流程:改对应受众契约 → 重新生成 → 补 handler 实现。
 
+## 行情转发(Market)
+
+site 行情页浏览器直连东财行情 API 会被其 WAF 按出口 IP 配额限流(TCP/TLS 正常、HTTP 请求发出后连接被直接断开,无状态码;诊断记录见 apps/server/internal/service/market.go 头注释),server 提供同形转发端点作为行情主源:站点契约 `openapi/site.yaml` 的 `Market` 标签(`/api/site/market/quote|kline|trends|sge-daily`,匿名公开)。
+
+- **白名单拼装,防 SSRF**:上游 URL 由服务端按参数白名单拼装(secid/klt/fqt/beg/end/lmt/ndays 契约层与 service 层双重校验),**绝不透传外部 URL**;上游固定 push2.eastmoney.com(快照)与 push2his.eastmoney.com(K线/分时);
+- **请求特征**:带浏览器 UA + `Referer: https://quote.eastmoney.com/`(WAF 对无浏览器特征的请求更严),超时 10s;
+- **TTL 缓存**(`internal/service/market_cache.go`):key=完整上游 URL,quote 15s / kline·trends 60s,容量 512(满则清过期、再淘汰最早过期);命中不打上游,**失败不缓存**;
+- **透传与错误转译**:上游响应体原样透传(`json.RawMessage`,仅校验非空 JSON 对象);上游网络失败/非 200/空体/非 JSON 对象统一转译哨兵 `ErrMarketUpstreamUnavailable`,handler 映射 **502 + 固定文案**(细节只进 slog warn,带 kind 与错误摘要);查询接口不写 oplog;
+- **上金所日线**(`GET /api/site/market/sge-daily?instid=Au99.99`,实现见 `internal/service/market_sge.go`):黄金现货合约(Au99.99 等)K 线的**权威精确源**,转发上金所官网 `POST https://www.sge.com.cn/graph/Dailyhq`(form 参数 `instid`,server 侧可直连、无 WAF 白名单问题,带常规 UA,超时 10s);仅日 K(数组序=日期,开,收,低,高),无成交量/成交额,上游无日期过滤参数(全量约 2300+ 条,由调用方截断);**TTL 5 分钟**(日线收盘后不变);上游对错误 instid 也返回 200 但数据行数值全 0,服务端判定「解析出的数据行全部 OHLC 为 0」为无效数据并转译 502(零星 0 行混在有效行中原样透传);instid pattern 保守限定 `Au` 前缀数字合约(`^Au[0-9]{2}\.[0-9]{2}$`),`Au(T+D)` 等命名风格确有需要再放宽;
+- **前端对接**:site 的 `MarketController.getMarketQuote/Kline/Trends/SgeDaily`(gen:api 生成),为行情数据 auto 链**主源**——site 行情请求优先经同源 `/api` 走 server 转发(带 TTL 缓存),东财直连/腾讯/gold-api 作为其后的兜底;GitHub Pages 纯静态部署下无 server,前端对 404 做会话级禁用快速跳过并整链回退直连源(见 docs/site.md 行情页小节)。
+
 ## 分层与错误处理
 
 - **handler 薄**:参数绑定、鉴权、调 service、按状态码写响应,不写业务规则;

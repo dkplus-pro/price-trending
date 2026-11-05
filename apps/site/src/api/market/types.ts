@@ -3,11 +3,14 @@
 // 目录职责与豁免说明(根 AGENTS.md §19 / apps/site/AGENTS.md §2「服务端数据走路由 loader」的
 // 适用边界):
 // - 该约束约束的是本仓库 server 契约数据(openapi/site.yaml 生成物);本目录数据来自
-//   东财 / 腾讯 / gold-api 的公开只读行情接口,由浏览器直连,不经过本仓库 server;
+//   东财 / 腾讯 / gold-api 的公开只读行情接口,由浏览器直连,不经过本仓库 server
+//   (例外:auto 兜底链末端的 server 转发源走站点契约端点,见 sources/server.ts);
 // - 纯静态部署(SITE_STATIC_EXPORT=true)下没有服务端,loader 无法承载(且行情需客户端轮询刷新),
 //   故此处按客户端 useRequest + 轮询取数,不走 loader;
-// - 因此本模块不进 orval 管线、不改 openapi/site.yaml、不使用 src/api/client.ts(契约 mutator),
-//   网络统一用原生 fetch(腾讯快照为 GBK 编码,按 arrayBuffer 解码后交给 TextDecoder)。
+// - 因此本模块不进 orval 管线、不改 openapi/site.yaml;东财 / 腾讯 / gold-api 三个直连源
+//   不使用 src/api/client.ts(契约 mutator),网络统一用原生 fetch(腾讯快照为 GBK 编码,
+//   按 arrayBuffer 解码后交给 TextDecoder);仅 server 转发源经 orval 生成物 +
+//   client.ts 请求同源 /api(见 sources/server.ts)。
 //
 // 分层与依赖方向(types ← config / utils / throttle ← sources ← index):
 //   types.ts     契约类型(本卡冻结:Wave 1 各源实现按此对齐)
@@ -142,10 +145,19 @@ export interface KlineRange {
   limit?: number;
 }
 
+/**
+ * K 线页的数据来源(UI 近似标注用):缺省视为 eastmoney(既有源不回填该字段)。
+ * paxg = PAXG 代币化黄金(binance.vision,xau/gc 兜底,近似报价);
+ * sge = 上金所官网日线(au9999 兜底,精确同标的)。
+ */
+export type KlinePageSource = "eastmoney" | "tencent" | "paxg" | "sge";
+
 /** K 线单页结果:hasMore 由「返回条数 === limit」判定。 */
 export interface KlinePage {
   bars: KlineBar[];
   hasMore: boolean;
+  /** 实际产出该页的来源;缺省(既有源未回填)视为 eastmoney,UI 据此渲染近似标注。 */
+  source?: KlinePageSource;
 }
 
 /** 分时结果集:points 按时间升序;prevClose 为分时基准昨收(源未提供为 null)。 */

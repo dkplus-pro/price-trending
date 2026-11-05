@@ -9,7 +9,8 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 // - 黄金三标的 au9999 / 伦敦金 / COMEX 的分时、快照、日 K(MA 图例)三区块都渲染出画布;
 // - AU9999 分时含上金所夜盘跨零点数据(index 等距轴,不炸);
 // - 伦敦金 hasVolume=false:底部无柱色(与有量的 AU9999 做相对比较);
-// - 直连域名被封锁(abort)时,公共 CORS 代理 host 兜底出图(证明 C13 的代理传输层可用)。
+// - server 转发端点不可达(模拟 GitHub Pages 静态托管)时,行情请求先打 server、再回退
+//   东财直连出图(server 优先链路;公共 CORS 代理传输层已移除)。
 //
 // 本 spec 不带 site project 的 baseURL(playwright.config.ts 的 projects 未匹配本文件),
 // 故一律用站点绝对地址;夹具沿用 apps/site/tests/market/fixtures/eastmoney/(与单测同源)。
@@ -38,24 +39,21 @@ const TRENDS_BY_SECID: Record<string, unknown> = {
 
 /** 东财直连域名(push2 / push2his 及其变体)。 */
 const EASTMONEY_RE = /eastmoney\.com\/api\/qt\//;
-/** 兜底用的公共 CORS 代理域名。 */
-const PROXY_RE = /^https:\/\/api\.(allorigins\.win|codetabs\.com)\//;
+/** server 转发端点(模拟静态托管时 abort)。 */
+const SERVER_API_RE = /\/api\/site\/market\//;
 /** 腾讯 / gold-api(不应被请求;拦住保证用例可判定)。 */
 const OTHER_SOURCE_RE = /qt\.gtimg\.cn|web\.ifzq\.gtimg\.cn|api\.gold-api\.com/;
-
-/** 代理 URL → 被编码的东财目标 URL;直连 URL 原样返回。 */
-function targetUrlOf(requestUrl: string): string {
-  const parsed = new URL(requestUrl);
-  if (PROXY_RE.test(requestUrl)) {
-    return parsed.searchParams.get("url") ?? parsed.searchParams.get("quest") ?? "";
-  }
-  return requestUrl;
-}
+/**
+ * PAXG 兜底源(binance.vision,黄金 K 线的专属兜底,见 apps/site/src/api/market/sources/binance-vision.ts):
+ * 一律 abort 模拟离线——本 spec 的 K 线链路由东财直连夹具承接(东财成功即不落兜底),
+ * 拦截该域保证用例确定性:即使链路顺序调整导致兜底被触达,也不会发出真实外网请求。
+ * 上金所端点(/api/site/market/sge-daily)已被 SERVER_API_RE 一并覆盖。
+ */
+const BINANCE_VISION_RE = /data-api\.binance\.vision\//;
 
 /** 按东财端点 + secid 回夹具(响应体即东财原 JSON,与真实取数同解析路径)。 */
 async function fulfillEastmoney(route: Route): Promise<void> {
-  const target = targetUrlOf(route.request().url());
-  const url = new URL(target);
+  const url = new URL(route.request().url());
   const body = url.pathname.endsWith("/ulist.np/get")
     ? ULIST_GOLD
     : url.pathname.endsWith("/stock/kline/get")
@@ -73,26 +71,33 @@ async function fulfillEastmoney(route: Route): Promise<void> {
 
 /**
  * 拦截行情请求。
- * @param blockDirect 为 true 时直连东财域名一律 abort(模拟本机「被限流/封锁」),代理域名照常回夹具。
+ * @param blockDirect 为 true 时直连东财域名一律 abort(模拟本机「被限流/封锁」)。
  */
 async function stubMarketRoutes(
   page: Page,
   options: { blockDirect?: boolean; requestLog?: string[] } = {}
 ): Promise<void> {
+  // server 转发源短路:e2e 没有(或不依赖)Go server,site dev 会把 /api/site/market/**
+  // 代理到 Go server,主源会得到 5xx/慢请求,给夹具链路加噪声且拖慢用例;
+  // 这里提前 abort,模拟 GitHub Pages 纯静态托管(无 server)——server 源收到网络错误后
+  // 会话级禁用、不再重试,后续请求全部由东财直连接管,不影响既有夹具断言。
+  await page.route(SERVER_API_RE, async (route) => {
+    options.requestLog?.push(route.request().url());
+    await route.abort();
+  });
   await page.route(
-    (url) => EASTMONEY_RE.test(url.href) || PROXY_RE.test(url.href),
+    (url) => EASTMONEY_RE.test(url.href),
     async (route) => {
-      const href = route.request().url();
-      options.requestLog?.push(href);
-      const isProxy = PROXY_RE.test(href);
-      if (isProxy || options.blockDirect !== true) {
-        await fulfillEastmoney(route);
+      options.requestLog?.push(route.request().url());
+      if (options.blockDirect === true) {
+        await route.abort();
         return;
       }
-      await route.abort();
+      await fulfillEastmoney(route);
     }
   );
   await page.route(OTHER_SOURCE_RE, (route) => route.abort());
+  await page.route(BINANCE_VISION_RE, (route) => route.abort());
 }
 
 /** 按区块标题定位标的区块(InstrumentSection 的 aria-label 即标的展示名)。 */
@@ -219,12 +224,14 @@ test("黄金页切到日K:三区块蜡烛图 + MA5/10/20 图例渲染", async ({
   await page.screenshot({ path: "/tmp/gold-e2e-daykline.png", fullPage: true });
 });
 
-test("直连域名被封锁时:公共 CORS 代理 host 兜底出图", async ({ page }) => {
+test("server 转发不可达(静态托管)→ 回退东财直连出图,server 端点先于直连被请求", async ({
+  page
+}) => {
   const requestLog: string[] = [];
-  await stubMarketRoutes(page, { blockDirect: true, requestLog });
+  await stubMarketRoutes(page, { requestLog });
   await page.goto(`${SITE_ORIGIN}/gold`);
 
-  // 直连两次 abort 后(各带退避)由代理域名取回数据:快照与分时都出图,无错误块。
+  // server 端点 abort(会话级禁用)后由东财直连接管:快照与分时都出图,无错误块。
   await expect(section(page, "黄金9999").locator(".quote-header-last")).toHaveText("904.48", {
     timeout: 30_000
   });
@@ -237,12 +244,21 @@ test("直连域名被封锁时:公共 CORS 代理 host 兜底出图", async ({ p
   await expect(page.locator(".market-instrument-error")).toHaveCount(0);
   await expect(page.locator(".market-page-error")).toHaveCount(0);
 
-  // 轮换顺序证据:直连域名先被请求(全部失败),随后代理域名收到请求并成功。
+  // 顺序证据:server 转发端点先被打,东财直连在其后收到请求并出数(direct 只会在某个
+  // server 调用最终失败后才发出,故首个直连必在首个 server 之后;末次 server 重试与首个
+  // 直连在毫秒级可能交错,属 client.ts 重试退避定时器的正常时序,不断言全局有序)。
+  const serverAttempts = requestLog.filter((href) => SERVER_API_RE.test(href));
   const directAttempts = requestLog.filter((href) => EASTMONEY_RE.test(href));
-  const proxyAttempts = requestLog.filter((href) => PROXY_RE.test(href));
-  expect(directAttempts[0]).toContain("push2his.eastmoney.com");
-  expect(proxyAttempts.length).toBeGreaterThan(0);
-  expect(proxyAttempts.some((href) => href.includes("api.allorigins.win"))).toBe(true);
+  expect(serverAttempts.length).toBeGreaterThan(0);
+  expect(directAttempts.length).toBeGreaterThan(0);
+  const firstServerIndex = requestLog.findIndex((href) => SERVER_API_RE.test(href));
+  const firstDirectIndex = requestLog.findIndex((href) => EASTMONEY_RE.test(href));
+  expect(firstDirectIndex).toBeGreaterThan(firstServerIndex);
+  // 会话级禁用的可观测形态:server 端点只出现在首轮取数——首轮 4 个并发调用(3 路分时
+  // + 1 路快照),client.ts 对幂等 GET 的无响应失败会重试 1 次,故恰为 8 个 HTTP 请求;
+  // 此后禁用生效,直连接管,轮询(快照 15s / 分时 60s)不再打 server(禁用语义的调用层
+  // 断言见 apps/site/tests/market/server.test.ts 与 index.test.ts)。
+  expect(serverAttempts).toHaveLength(8);
 
-  await page.screenshot({ path: "/tmp/gold-e2e-proxy.png", fullPage: true });
+  await page.screenshot({ path: "/tmp/gold-e2e-server-fallback.png", fullPage: true });
 });

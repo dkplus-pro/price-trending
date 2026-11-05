@@ -13,7 +13,9 @@
 // 3. 数据源:source === "auto" 时 options 传 undefined(走 facade 兜底链),其余透传 { source }(单源不兜底);
 // 4. 竞态守卫:每次取数自增请求序号,序号过期(期间又切了周期 / 范围 / 数据源)的响应一律丢弃;
 // 5. 错误:取数失败只落在「图表区」错误态(MarketError 的 message 已是人话),
-//    不污染上方的 QuoteHeader;已有可展示数据时的刷新失败静默保留旧数据。
+//    不污染上方的 QuoteHeader;已有可展示数据时的刷新失败静默保留旧数据;
+// 6. 来源标注:KlinePage.source 落在黄金专属兜底源(paxg/sge)时映射 chartNote 近似标注
+//    (见 chartNoteFor),由 InstrumentSection 渲染在图表下方。
 import { useRequest } from "ahooks";
 import { useCallback, useRef, useState } from "react";
 
@@ -22,6 +24,8 @@ import type {
   ChartPeriod,
   InstrumentConfig,
   KlineBar,
+  KlinePageSource,
+  KlinePeriod,
   MarketQueryOptions,
   TrendPoint
 } from "../../api/market/types";
@@ -33,8 +37,27 @@ const TREND_POLL_INTERVAL_MS = 60_000;
 /** 范围查询单次条数上限:条数由日期范围决定,这里只做防御性上限(见 api/market/config 的默认 200)。 */
 const RANGE_KLINE_LIMIT = 5_000;
 
-/** 会话内 K 线缓存(key `${instrumentId}:${period}:${beg}:${end}:${source}`):切回看过的组合立即渲染,再后台刷新。 */
-const klineCache = new Map<string, KlineBar[]>();
+/**
+ * KlinePage.source → 图表来源标注(黄金标的落到专属兜底源时提示数据语义):
+ * - paxg:PAXG 代币化黄金是近似报价,需明示与现货/期货的价差;
+ * - sge:上金所日线精确但无量额口径,周/月为日 K 客户端聚合;
+ * - eastmoney / tencent / 缺省:常规上游,不标注。
+ */
+export function chartNoteFor(
+  source: KlinePageSource | undefined,
+  period: KlinePeriod
+): string | undefined {
+  if (source === "paxg") {
+    return "PAXG 代币化黄金近似报价,与该标的现货/期货存在小幅价差";
+  }
+  if (source === "sge") {
+    return period === "day" ? "上金所官网日线(无成交量口径)" : "上金所日K聚合";
+  }
+  return undefined;
+}
+
+/** 会话内 K 线缓存(key `${instrumentId}:${period}:${beg}:${end}:${source}`):切回看过的组合立即渲染,再后台刷新;note 随 bars 一并缓存(缓存命中时标注立即可见)。 */
+const klineCache = new Map<string, { bars: KlineBar[]; note?: string }>();
 
 /** 一次取数的完整载荷;key 用于判定载荷是否属于「当前周期 / 范围 / 数据源」。 */
 interface ChartPayload {
@@ -43,6 +66,8 @@ interface ChartPayload {
   bars?: KlineBar[];
   trendPoints?: TrendPoint[];
   prevClose?: number | null;
+  /** 图表来源标注(仅 K 线携带,见 chartNoteFor)。 */
+  note?: string;
 }
 
 /** useChartData 出参:图表所需数据 + 加载 / 错误态(error/retry 供图表区错误态使用)。 */
@@ -51,6 +76,8 @@ export interface ChartDataResult {
   bars?: KlineBar[];
   trendPoints?: TrendPoint[];
   prevClose?: number | null;
+  /** 图表数据来源标注(黄金专属兜底源 paxg/sge 时有值,其余 undefined)。 */
+  chartNote?: string;
   loading: boolean;
   /** 周期级错误文案(null = 无错误);有数据时的刷新失败不置错。 */
   error: string | null;
@@ -112,7 +139,7 @@ async function requestChartData(
     { beg: toYyyymmdd(beg), end: toYyyymmdd(end), limit: RANGE_KLINE_LIMIT },
     options
   );
-  return { key, mode: "kline", bars: page.bars };
+  return { key, mode: "kline", bars: page.bars, note: chartNoteFor(page.source, period) };
 }
 
 /** 取数失败 → 图表区文案(facade 抛出的 MarketError 也是 Error,message 已是人话)。 */
@@ -160,7 +187,7 @@ export function useChartData(
     // 已有可展示数据(缓存或当前目标载荷)时的请求视为「刷新」:失败不顶掉图表。
     const hasUsableData = cached !== undefined || !switching;
     if (cached !== undefined) {
-      applyPayload({ key: targetKey, mode: "kline", bars: cached });
+      applyPayload({ key: targetKey, mode: "kline", bars: cached.bars, note: cached.note });
     }
     try {
       const next = await requestChartData(instrument, period, [rangeBeg, rangeEnd], source);
@@ -168,7 +195,7 @@ export function useChartData(
         return;
       }
       if (next.mode === "kline") {
-        klineCache.set(targetKey, next.bars ?? []);
+        klineCache.set(targetKey, { bars: next.bars ?? [], note: next.note });
       }
       applyPayload(next);
       setError(null);
@@ -204,6 +231,7 @@ export function useChartData(
     trendPoints: active?.trendPoints,
     // 昨收基准线只在分时(尤其 minute)使用,其余周期不传。
     prevClose: period === "minute" ? (active?.prevClose ?? null) : undefined,
+    chartNote: active?.note,
     loading: active === null && error === null,
     error,
     retry

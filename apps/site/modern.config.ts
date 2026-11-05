@@ -67,6 +67,8 @@ function reportOrigins(): string[] {
 }
 
 // 行情源域名(行情页由浏览器直连,与部署形态无关,connect-src 无条件放行,见 T1e 卡片)。
+// server 转发主源走同源 /api('self' 已覆盖);曾经的公共 CORS 代理域名
+// (api.allorigins.win / api.codetabs.com)已随代理传输层移除一并下线。
 const MARKET_CONNECT_SRC = [
   "https://push2.eastmoney.com",
   "https://1.push2.eastmoney.com",
@@ -81,9 +83,8 @@ const MARKET_CONNECT_SRC = [
   "https://qt.gtimg.cn",
   "https://proxy.finance.qq.com",
   "https://api.gold-api.com",
-  // 公共 CORS 代理(东财全域名不可达时的最末端传输层兜底,仅 auto 链使用,见 docs/site.md 行情页小节)
-  "https://api.allorigins.win",
-  "https://api.codetabs.com"
+  // PAXG 兜底源(伦敦金/COMEX 黄金 K 线,浏览器直连 Binance 公共数据镜像,CORS *)
+  "https://data-api.binance.vision"
 ];
 
 const productionCSP = [

@@ -8,28 +8,24 @@
  * `{code, message, logID}`,用 HTTP 状态码 + message 表达。
  * 响应 schema 只描述 data 载荷(信封由服务端统一包装)。
  * 约定:只提供 GET;DTO 按对外需要裁剪(不原样暴露 admin 模型);媒体字段直接给 CDN 直链。
+ * 行情端点(/api/site/market/*)由服务端转发东方财富行情接口(push2/push2his),
+ * 上游响应体原样透传(data 结构随上游,不做结构化承诺),服务端带 TTL 缓存以收敛对上游的低频请求。
  *
  * OpenAPI spec version: 0.1.0
  */
-import type {
-  SiteInfo
-} from '../cMSSiteAPI.schemas';
+import type { SiteInfo } from "../cMSSiteAPI.schemas";
 
-import { customInstance } from '../../client';
+import { customInstance } from "../../client";
 
-
-
-  export const getSite = () => {
-/**
- * @summary 站点公开信息(站名、Logo 等,来自 admin 系统配置)
- */
-const getSiteInfo = (
-
- ) => {
-      return customInstance<SiteInfo>(
-      {url: `/api/site/site-info`, method: 'GET'
-    },
-      );
-    }
-  return {getSiteInfo}};
-export type GetSiteInfoResult = NonNullable<Awaited<ReturnType<ReturnType<typeof getSite>['getSiteInfo']>>>
+export const getSite = () => {
+  /**
+   * @summary 站点公开信息(站名、Logo 等,来自 admin 系统配置)
+   */
+  const getSiteInfo = () => {
+    return customInstance<SiteInfo>({ url: `/api/site/site-info`, method: "GET" });
+  };
+  return { getSiteInfo };
+};
+export type GetSiteInfoResult = NonNullable<
+  Awaited<ReturnType<ReturnType<typeof getSite>["getSiteInfo"]>>
+>;

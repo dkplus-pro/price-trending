@@ -1,15 +1,24 @@
-// MarketFilterBar 组件用例(行情页全局筛选栏:周期 / 日期范围(含快捷跨度)/ 数据源,吸顶固定):
-// 三组控件渲染与受控回显、写 store 入口(周期按钮 / 日期面板点选 / 数据源下拉 / 快捷跨度按钮)、
-// 快捷跨度的高亮比对(命中才高亮、自定义范围不高亮)、分时两档禁用日期范围与快捷按钮、跨组件共享、SSR 直出。
+// MarketFilterBar 组件用例(行情页全局筛选栏:周期 / 日期范围 / 数据源,吸顶固定):
+// 三组控件渲染与受控回显、写 store 入口(周期按钮 / 日期面板点选 / 数据源下拉)、
+// 快捷跨度收在日期面板 extra 区(面板打开才渲染、点档写 store 并收起面板、命中档高亮、自定义范围不高亮)、
+// 分时两档禁用日期范围(面板打不开、extra 档位整体禁用)、跨组件共享、SSR 首帧一致性回归。
 // 六类边界:空值(外部注入非法 dateRange)、零值(月首/年首见 store 用例)、
 // 越界(未来日期禁选、月末溢出见 store 用例)、配置缺失(N/A,组件无配置入参)、网络失败(N/A,组件不发请求)、
-// 非法状态(周期为分时时改 dateRange 仍写 store;快速连点快捷项取最终态)。
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+// 非法状态(周期为分时时改 dateRange 仍写 store;面板内依次点两档取最终态)。
+// SSR 首帧一致性(hydration 回归,两端首帧必须一致):
+// ① 时间依赖值不上首帧——store 默认 dateRange 按当前时间计算(SSR 进程启动日 ≠ 浏览器当天),
+//    首帧 HTML 不得含任何日期串,挂载后才回填真实范围;
+// ② 无位置派生 id——useId 在 dev 下随客户端树结构错位(SSR/客户端包裹层级不同,实测必现),
+//    控件组可访问名用静态 aria-label,首帧 HTML 不得含 aria-labelledby / React useId 形态的 id。
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import MarketFilterBar, { isFutureDate } from "../../src/components/market/market-filter-bar";
+import MarketFilterBar, {
+  isFutureDate,
+  MarketQuickRange
+} from "../../src/components/market/market-filter-bar";
 import {
   computeQuickRange,
   getDefaultDateRange,
@@ -18,6 +27,12 @@ import {
 } from "../../src/store/market-filter";
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 非锚定的日期串形态(用于断言首帧 HTML 不含任何具体日期)。 */
+const DATE_STRING_PATTERN = /\d{4}-\d{2}-\d{2}/;
+
+/** 日期范围禁用原因文案(行内 Tooltip 与面板内 title 同值)。 */
+const DISABLED_HINT = "分时/五日不支持日期范围";
 
 /** 本地今天 "YYYY-MM-DD"(与 store 的 getDefaultDateRange 同口径)。 */
 function today(): string {
@@ -41,14 +56,28 @@ function openDatePanel(container: HTMLElement): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>(".arco-picker-cell-in-view"));
 }
 
+/** 面板 extra 区内的快捷档位单选组(面板未打开时抛错,让用例尽早暴露)。 */
+function quickGroup(): HTMLElement {
+  const group = document.querySelector<HTMLElement>(".market-filter-quick");
+  if (group === null) {
+    throw new Error("未找到日期面板 extra 区内的快捷档位组");
+  }
+  return group;
+}
+
+/** 面板内全部快捷档位单选项(顺序即渲染顺序;数量与 label 均由 store 决定,用例不硬编码)。 */
+function quickOptions(): HTMLInputElement[] {
+  return within(quickGroup()).getAllByRole("radio") as HTMLInputElement[];
+}
+
+/** 面板内某档位是否高亮(受控比对命中时选中态落在内部 input 上)。 */
+function isQuickChecked(label: string): boolean {
+  return (within(quickGroup()).getByRole("radio", { name: label }) as HTMLInputElement).checked;
+}
+
 /** 单元格是否被 Arco 标为禁用(disabledDate 命中)。 */
 function isCellDisabled(cell: HTMLElement): boolean {
   return cell.className.includes("arco-picker-cell-disabled");
-}
-
-/** 某个快捷跨度项是否高亮(受控比对命中时选中态落在内部 input 上)。 */
-function isQuickChecked(label: string): boolean {
-  return (screen.getByRole("radio", { name: label }) as HTMLInputElement).checked;
 }
 
 /** 打开数据源下拉并返回选项节点(Arco Select 弹层渲染在 body)。 */
@@ -100,6 +129,22 @@ describe("MarketFilterBar 渲染与受控回显", () => {
     expect(screen.getByRole("radio", { name: "分时" })).not.toBeChecked();
     expect(screen.getByText("东方财富")).toBeInTheDocument();
   });
+
+  it("筛选栏行内不再渲染快捷档位:只剩周期 / 日期范围 / 数据源三组", () => {
+    const { container } = render(<MarketFilterBar />);
+    const bar = container.querySelector<HTMLElement>(".market-filter-bar");
+    const barNode = bar as HTMLElement;
+
+    // 快捷档位只随日期面板挂载:面板未打开时筛选栏内既没有新的快捷组,也没有旧的行内按钮排。
+    expect(barNode.querySelector(".market-filter-quick")).toBeNull();
+    expect(barNode.querySelector(".market-filter-quick-panel")).toBeNull();
+    expect(within(barNode).getAllByRole("group")).toHaveLength(3);
+    expect(
+      within(barNode)
+        .getAllByRole("radio")
+        .map((radio) => (radio as HTMLInputElement).value)
+    ).toEqual(["minute", "fiveday", "day", "week", "month"]);
+  });
 });
 
 describe("MarketFilterBar 写 store", () => {
@@ -146,83 +191,131 @@ describe("MarketFilterBar 写 store", () => {
   });
 });
 
-describe("MarketFilterBar 快捷日期范围", () => {
-  it("日期范围组内渲染六个快捷项(顺序 一周 / 2周 / 1个月 / 3个月 / 半年 / 1年)", () => {
-    render(<MarketFilterBar />);
+describe("MarketFilterBar 快捷日期范围(日期面板 extra 区)", () => {
+  it("打开日期面板后 extra 区渲染 store 的全部档位(数量与顺序同 QUICK_RANGE_OPTIONS)", () => {
+    useMarketFilterStore.setState({ period: "day" });
+    const { container } = render(<MarketFilterBar />);
+    expect(document.querySelector(".market-filter-quick")).toBeNull();
 
-    const dateGroup = screen.getByRole("group", { name: "日期范围" });
-    expect(
-      within(dateGroup)
-        .getAllByRole("radio")
-        .map((radio) => (radio as HTMLInputElement).value)
-    ).toEqual(QUICK_RANGE_OPTIONS.map(({ key }) => key));
+    openDatePanel(container);
+
+    // 落位在 Arco 的 extra 容器里(日期面板页脚),而非筛选栏行内。
+    expect(quickGroup().closest(".arco-picker-footer-extra-wrapper")).not.toBeNull();
+    const options = quickOptions();
+    expect(options).toHaveLength(QUICK_RANGE_OPTIONS.length);
+    expect(options.map((option) => option.value)).toEqual(
+      QUICK_RANGE_OPTIONS.map(({ key }) => key)
+    );
+    expect(options.map((option) => option.closest("label")?.textContent)).toEqual(
+      QUICK_RANGE_OPTIONS.map(({ label }) => label)
+    );
   });
 
-  it("点「1个月」写 store.dateRange 为对应区间,并把新范围回显到 RangePicker", () => {
+  it("点面板内「5天」写 store.dateRange 并收起面板,再点输入框可重新打开", async () => {
     useMarketFilterStore.setState({ period: "day" });
     const { container } = render(<MarketFilterBar />);
     const initialRange = getDefaultDateRange();
 
-    fireEvent.click(screen.getByRole("radio", { name: "1个月" }));
+    // 「5天」是 store 新增档位;若 store 在途尚未合入(六档版),回退到最后一档(跨度最大,必偏离默认范围)。
+    const target =
+      QUICK_RANGE_OPTIONS.find(({ label }) => label === "5天") ??
+      QUICK_RANGE_OPTIONS[QUICK_RANGE_OPTIONS.length - 1];
+    const expected = computeQuickRange(target.key);
+    expect(expected).not.toEqual(initialRange);
 
-    const expected = computeQuickRange("1m");
-    expect(expected[0]).not.toBe(initialRange[0]);
+    openDatePanel(container);
+    fireEvent.click(within(quickGroup()).getByRole("radio", { name: target.label }));
+
     expect(useMarketFilterStore.getState().dateRange).toEqual(expected);
     // 其余筛选字段不动。
     expect(useMarketFilterStore.getState().period).toBe("day");
     expect(useMarketFilterStore.getState().source).toBe("auto");
     expect(dateInputs(container).map((input) => input.value)).toEqual(expected);
+
+    // 面板收起(受控 popupVisible 置 false,退场动画后弹层节点卸载),受控态未卡死:还能再打开。
+    await waitFor(() => expect(document.querySelector(".market-filter-quick")).toBeNull());
+    openDatePanel(container);
+    expect(quickOptions()).toHaveLength(QUICK_RANGE_OPTIONS.length);
   });
 
-  it("当前范围恰为某快捷区间时只有该项高亮", () => {
-    useMarketFilterStore.setState({ period: "day", dateRange: computeQuickRange("3m") });
-    render(<MarketFilterBar />);
-
-    expect(isQuickChecked("3个月")).toBe(true);
-    expect(isQuickChecked("1个月")).toBe(false);
-    expect(isQuickChecked("1年")).toBe(false);
-  });
-
-  it("手选自定义范围后无任何快捷项高亮(受控比对不命中)", () => {
-    useMarketFilterStore.setState({ period: "day", dateRange: computeQuickRange("1w") });
+  it("面板内当前范围命中的档位高亮,自定义范围整排不高亮", () => {
+    const target = QUICK_RANGE_OPTIONS[QUICK_RANGE_OPTIONS.length - 1];
+    useMarketFilterStore.setState({ period: "day", dateRange: computeQuickRange(target.key) });
     const { container } = render(<MarketFilterBar />);
-    expect(isQuickChecked("一周")).toBe(true);
 
+    openDatePanel(container);
+
+    expect(isQuickChecked(target.label)).toBe(true);
+    for (const { key, label } of QUICK_RANGE_OPTIONS) {
+      if (key !== target.key) {
+        expect(isQuickChecked(label)).toBe(false);
+      }
+    }
+
+    // 手选 / 外部置入的自定义范围:起止都不等于任何档位(档位终点恒为今天),整排都不高亮。
     act(() => {
-      useMarketFilterStore.getState().setDateRange(["2026-01-01", "2026-01-31"]);
+      useMarketFilterStore.getState().setDateRange(["2020-01-01", "2020-01-31"]);
     });
 
     expect(QUICK_RANGE_OPTIONS.every(({ label }) => !isQuickChecked(label))).toBe(true);
-    expect(dateInputs(container).map((input) => input.value)).toEqual(["2026-01-01", "2026-01-31"]);
+    expect(dateInputs(container).map((input) => input.value)).toEqual(["2020-01-01", "2020-01-31"]);
   });
 
-  it("分时 / 五日禁用快捷按钮(点击不写 store),切到日K 后恢复", () => {
-    const initialRange = getDefaultDateRange();
-    render(<MarketFilterBar />);
+  it("面板内依次点两档:最终态为最后一次点击的档位,且只有该档高亮(非法状态)", async () => {
+    // 起点为自定义范围(不命中任何档):两次点击都真正改值,避开「点中已选档位」时 radio 无 change 事件的语义干扰。
+    useMarketFilterStore.setState({ period: "day", dateRange: ["2020-01-01", "2020-01-31"] });
+    const { container } = render(<MarketFilterBar />);
 
-    expect(screen.getByRole("radio", { name: "1个月" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("radio", { name: "1个月" }));
-    expect(useMarketFilterStore.getState().dateRange).toEqual(initialRange);
+    const first = QUICK_RANGE_OPTIONS[0];
+    const last = QUICK_RANGE_OPTIONS[QUICK_RANGE_OPTIONS.length - 1];
+    expect(first.key).not.toBe(last.key);
 
+    openDatePanel(container);
+    fireEvent.click(within(quickGroup()).getByRole("radio", { name: first.label }));
+    expect(useMarketFilterStore.getState().dateRange).toEqual(computeQuickRange(first.key));
+
+    // 点档即收起面板,故第二次点击前需重新打开(受控开合不卡死)。
+    await waitFor(() => expect(document.querySelector(".market-filter-quick")).toBeNull());
+    openDatePanel(container);
+    fireEvent.click(within(quickGroup()).getByRole("radio", { name: last.label }));
+
+    expect(useMarketFilterStore.getState().dateRange).toEqual(computeQuickRange(last.key));
+    await waitFor(() => expect(document.querySelector(".market-filter-quick")).toBeNull());
+    openDatePanel(container);
+    expect(isQuickChecked(last.label)).toBe(true);
+    expect(isQuickChecked(first.label)).toBe(false);
+  });
+
+  it("分时 / 五日档面板打不开且 extra 档位整体禁用,切到日K 后恢复", () => {
+    const { container } = render(<MarketFilterBar />);
+
+    // 禁用态下 RangePicker 的 Trigger 被 disabled:点输入框不渲染面板,extra 也就无从挂载。
+    fireEvent.click(dateInputs(container)[0]);
+    expect(document.querySelector(".market-filter-quick")).toBeNull();
+
+    // extra 档位与 RangePicker 同禁用:面板在禁用态本就打不开,故直接单测 extra 组件本身
+    // (与上面 RangePicker 的禁用断言合起来构成覆盖);禁用提示走包裹层原生 title。
+    const disabledExtra = render(
+      <MarketQuickRange disabled matchedKey={undefined} onSelect={() => undefined} />
+    );
+    const disabledOptions = within(disabledExtra.container).getAllByRole(
+      "radio"
+    ) as HTMLInputElement[];
+    expect(disabledOptions).toHaveLength(QUICK_RANGE_OPTIONS.length);
+    expect(disabledOptions.every((option) => option.disabled)).toBe(true);
+    expect(disabledExtra.container.querySelector(".market-filter-quick-panel")).toHaveAttribute(
+      "title",
+      DISABLED_HINT
+    );
+    disabledExtra.unmount();
+
+    // 日K 档恢复:面板可打开,extra 档位可点。
     fireEvent.click(screen.getByRole("radio", { name: "日K" }));
-    expect(screen.getByRole("radio", { name: "1个月" })).toBeEnabled();
+    openDatePanel(container);
+    expect(quickOptions().every((option) => !option.disabled)).toBe(true);
 
     fireEvent.click(screen.getByRole("radio", { name: "五日" }));
-    expect(screen.getByRole("radio", { name: "1个月" })).toBeDisabled();
-  });
-
-  it("快速连点快捷项:最终态为最后一次点击的区间,且只有该项高亮(非法状态)", () => {
-    useMarketFilterStore.setState({ period: "day" });
-    render(<MarketFilterBar />);
-
-    fireEvent.click(screen.getByRole("radio", { name: "一周" }));
-    fireEvent.click(screen.getByRole("radio", { name: "1年" }));
-    fireEvent.click(screen.getByRole("radio", { name: "半年" }));
-
-    expect(useMarketFilterStore.getState().dateRange).toEqual(computeQuickRange("6m"));
-    expect(isQuickChecked("半年")).toBe(true);
-    expect(isQuickChecked("一周")).toBe(false);
-    expect(isQuickChecked("1年")).toBe(false);
+    expect(dateInputs(container).every((input) => input.disabled)).toBe(true);
   });
 });
 
@@ -248,7 +341,7 @@ describe("MarketFilterBar 日期范围的启用与禁用", () => {
     expect(wrap).toBeInTheDocument();
     await userEvent.hover(wrap as Element);
 
-    expect(await screen.findByText("分时/五日不支持日期范围")).toBeInTheDocument();
+    expect(await screen.findByText(DISABLED_HINT)).toBeInTheDocument();
   });
 });
 
@@ -266,18 +359,22 @@ describe("MarketFilterBar 跨组件共享", () => {
 });
 
 describe("MarketFilterBar 边界", () => {
-  it("store 被外部置入非法 dateRange 时组件不炸(空值边界)", () => {
+  it("store 被外部置入非法 dateRange 时组件不炸,面板内整排不高亮(空值边界)", () => {
     const initialRange = getDefaultDateRange();
     const illegalValues: unknown[] = [null, [], ["2026-01-01"]];
+    useMarketFilterStore.setState({ period: "day" });
 
     for (const illegal of illegalValues) {
       useMarketFilterStore.setState({ dateRange: illegal as [string, string] });
       const { container, unmount } = render(<MarketFilterBar />);
 
-      // 不抛错即可:非法值由 Arco 自行降级为空/半空展示,组件不做额外校验;
-      // 快捷项的高亮比对同样容错(null / 半截数组都不命中)。
+      // 不抛错即可:非法值由 Arco 自行降级为空/半空展示,组件不做额外校验。
       expect(container.querySelector(".market-filter-bar")).toBeInTheDocument();
       expect(dateInputs(container)).toHaveLength(2);
+
+      openDatePanel(container);
+      // 快捷档位照常全量渲染,但高亮比对容错(null / 半截数组都不命中)。
+      expect(quickOptions()).toHaveLength(QUICK_RANGE_OPTIONS.length);
       expect(QUICK_RANGE_OPTIONS.every(({ label }) => !isQuickChecked(label))).toBe(true);
       unmount();
     }
@@ -303,6 +400,8 @@ describe("MarketFilterBar 边界", () => {
     expect(todayCell).toBeDefined();
     expect(isCellDisabled(todayCell as HTMLElement)).toBe(false);
     expect(cells.some((cell) => cell !== todayCell && isCellDisabled(cell))).toBe(true);
+    // 面板内的快捷档位不受 disabledDate 影响(档位终点恒为今天,永远合法)。
+    expect(quickOptions().every((option) => !option.disabled)).toBe(true);
   });
 
   it("周期为分时时改 dateRange:组件不拦(仍写 store 并灰态回显),由图表侧按周期忽略(非法状态)", () => {
@@ -320,7 +419,7 @@ describe("MarketFilterBar 边界", () => {
     expect(dateInputs(container).map((input) => input.value)).toEqual(["2026-01-01", "2026-01-31"]);
   });
 
-  it("SSR 直出默认筛选态(renderToString 不依赖 window)", () => {
+  it("SSR 首帧不渲染具体日期、不含位置派生 id(hydration 回归:两端首帧一致)", () => {
     const html = renderToString(<MarketFilterBar />);
 
     expect(html).toContain("行情筛选");
@@ -329,11 +428,29 @@ describe("MarketFilterBar 边界", () => {
     }
     expect(html).toContain("分时");
     expect(html).toContain("自动(多源兜底)");
-    // 快捷跨度按钮随 SSR 一并直出。
+    // 快捷档位随日期面板挂载:SSR 不渲染弹层,故不出现在首帧 HTML。
     for (const { label } of QUICK_RANGE_OPTIONS) {
-      expect(html).toContain(label);
+      expect(html).not.toContain(label);
     }
-    // 日期范围来自 store 创建时的默认值(组件内不重算当天日期)。
-    expect(html).toContain(getDefaultDateRange()[0]);
+    // ① 时间依赖值不上首帧:store 默认 dateRange 按当前时间计算(SSR 进程启动日 ≠ 浏览器当天),
+    //    首帧 HTML 含日期串即构成 SSR/客户端 hydration 错配 → 挂载前一律为空输入框。
+    expect(html).not.toMatch(DATE_STRING_PATTERN);
+    // ② 无位置派生 id:useId 的 id 随树位置推导,dev 下客户端树包裹层级与 SSR 不同必错位,
+    //    控件组可访问名由静态 aria-label 提供(首帧 HTML 里不应再出现 labelledby 关联形态)。
+    expect(html).not.toContain("aria-labelledby");
+    expect(html).not.toContain("_modern-js-R_");
+    // 可访问名仍与可见文案一致(静态 aria-label)。
+    expect(html).toContain('aria-label="周期"');
+    expect(html).toContain('aria-label="日期范围"');
+    expect(html).toContain('aria-label="数据源"');
+  });
+
+  it("客户端挂载后回填真实日期范围(首帧为空 → mounted 后含 store 默认范围)", () => {
+    const { container } = render(<MarketFilterBar />);
+
+    // 挂载后(测试环境 effect 已冲刷)输入框回填浏览器当天范围;交互语义与修复前一致。
+    expect(dateInputs(container).map((input) => input.value)).toEqual(getDefaultDateRange());
+    // 首帧(等价 SSR 输出)不含该日期串,证明回填确实发生在挂载之后。
+    expect(renderToString(<MarketFilterBar />)).not.toMatch(DATE_STRING_PATTERN);
   });
 });

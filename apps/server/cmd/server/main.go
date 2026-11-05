@@ -113,6 +113,10 @@ func run() error {
 	configsService := service.NewConfigService(db)
 	dictsService := service.NewDictService(db)
 
+	// 行情转发(site 受众):上游域名/超时/缓存容量用默认值,见 internal/service/market.go;
+	// 把行情页访客对东财 WAF 的「各自直连」收敛为服务器单点低频请求 + TTL 缓存。
+	marketService := service.NewMarketService(service.MarketServiceConfig{})
+
 	jwtSkip := httpapi.JWTSkipPaths("/api/admin/healthz", "/api/admin/auth/login")
 	loadPermissionCodes := func(ctx context.Context, userID int64) ([]string, error) {
 		return usersService.PermissionCodes(ctx, userID)
@@ -122,7 +126,7 @@ func run() error {
 	gen.HandlerFromMux(handler.New(logger, authService, usersService, rolesService, permissionsService, logsService, configsService, dictsService, mediaService, uploadsService), adminMux)
 
 	siteMux := http.NewServeMux()
-	sitegen.HandlerFromMux(sitehandler.New(logger, configsService), siteMux)
+	sitegen.HandlerFromMux(sitehandler.New(logger, configsService, marketService), siteMux)
 
 	// app 受众:version/check 注入 env 版本配置服务(其余端点仍无 service);h5 维持纯匿名公开链。
 	versionService := service.NewVersionService(service.VersionServiceConfig{

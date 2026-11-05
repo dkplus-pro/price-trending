@@ -430,6 +430,46 @@ describe("InstrumentSection 错误态", () => {
   });
 });
 
+describe("InstrumentSection 图表来源标注(chartNote,黄金专属兜底源的近似语义小字)", () => {
+  it("KlinePage.source=paxg:图表下方渲染 PAXG 近似报价标注(.market-instrument-chart-note)", async () => {
+    mockGetKlines.mockResolvedValue({
+      bars: makeBars(30),
+      hasMore: false,
+      source: "paxg"
+    });
+    resetMarketFilter({ period: "day" });
+    renderSection({ instrument: instrumentOf("xau") });
+
+    const note = await screen.findByText("PAXG 代币化黄金近似报价,与该标的现货/期货存在小幅价差");
+    expect(note).toHaveClass("market-instrument-chart-note");
+  });
+
+  it("source=sge 且 period=day:渲染「上金所官网日线(无成交量口径)」", async () => {
+    mockGetKlines.mockResolvedValue({ bars: makeBars(30), hasMore: false, source: "sge" });
+    resetMarketFilter({ period: "day" });
+    renderSection({ instrument: instrumentOf("au9999") });
+
+    await screen.findByText("上金所官网日线(无成交量口径)");
+  });
+
+  it("source=sge 且 period=week:渲染「上金所日K聚合」(周/月为客户端聚合口径)", async () => {
+    mockGetKlines.mockResolvedValue({ bars: makeBars(30), hasMore: false, source: "sge" });
+    resetMarketFilter({ period: "week" });
+    renderSection({ instrument: instrumentOf("au9999") });
+
+    await screen.findByText("上金所日K聚合");
+  });
+
+  it("source 缺省(eastmoney/腾讯等常规源):不渲染标注(空值边界)", async () => {
+    mockGetKlines.mockResolvedValue({ bars: makeBars(30), hasMore: false });
+    resetMarketFilter({ period: "day" });
+    renderSection({ instrument: instrumentOf("sh000001") });
+
+    await waitFor(() => expect(latestChartProps().mode).toBe("kline"));
+    expect(document.querySelector(".market-instrument-chart-note")).toBeNull();
+  });
+});
+
 describe("InstrumentSection 竞态守卫", () => {
   it("快速连切周期:旧周期(含已放弃的中间周期)的迟到响应不覆盖新周期数据", async () => {
     const minuteDeferred = createDeferred<TrendSet>();

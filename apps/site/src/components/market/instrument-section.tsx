@@ -128,6 +128,10 @@ export default function InstrumentSection({
             height={isMobile ? CHART_HEIGHT_MOBILE : CHART_HEIGHT_DESKTOP}
             loading={chart.loading}
           />
+          {/* 数据来源标注:黄金标的落到专属兜底源(PAXG / 上金所)时的小字提示,常规来源不渲染。 */}
+          {chart.chartNote === undefined ? null : (
+            <p className="market-instrument-chart-note">{chart.chartNote}</p>
+          )}
         </>
       ) : (
         <div className="market-instrument-error" role="alert">

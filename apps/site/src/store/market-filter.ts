@@ -12,9 +12,6 @@ import type { ChartPeriod } from "../api/market/types";
  */
 export type MarketSource = "auto" | "eastmoney" | "tencent";
 
-/** 默认日期范围跨度(近 365 天)。 */
-const DEFAULT_RANGE_DAYS = 365;
-
 /** Date → "YYYY-MM-DD"(本地时区,与页面展示口径一致)。 */
 function formatDate(date: Date): string {
   const pad = (part: number): string => String(part).padStart(2, "0");
@@ -22,24 +19,21 @@ function formatDate(date: Date): string {
 }
 
 /**
- * 默认日期范围 [近 365 天, 今天],纯 Date 计算(本地时区):
- * 起止都用本地日期构造,跨月 / 跨年 / 闰年由 Date 自行进位。
+ * 默认日期范围 = 快捷「1天」档 [今天, 今天](与 computeQuickRange("1d") 同值),
+ * 与页面初始周期「分时」配套;纯 Date 计算(本地时区),跨月 / 跨年 / 闰年由 Date 自行进位。
  */
 export function getDefaultDateRange(): [string, string] {
-  const today = new Date();
-  const start = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate() - DEFAULT_RANGE_DAYS
-  );
-  return [formatDate(start), formatDate(today)];
+  return computeQuickRange("1d");
 }
 
-/** 快捷日期跨度键:周 / 月 / 年三档,键即跨度语义。 */
-export type QuickRangeKey = "1w" | "2w" | "1m" | "3m" | "6m" | "1y";
+/** 快捷日期跨度键:日 / 周 / 月 / 年四类档位,键即跨度语义。 */
+export type QuickRangeKey = "1d" | "3d" | "5d" | "1w" | "2w" | "1m" | "3m" | "6m" | "1y";
 
 /** 快捷跨度选项(顺序即筛选栏展示顺序)。 */
 export const QUICK_RANGE_OPTIONS: { key: QuickRangeKey; label: string }[] = [
+  { key: "1d", label: "1天" },
+  { key: "3d", label: "3天" },
+  { key: "5d", label: "5天" },
   { key: "1w", label: "一周" },
   { key: "2w", label: "2周" },
   { key: "1m", label: "1个月" },
@@ -53,7 +47,7 @@ function lastDayOfMonth(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate();
 }
 
-/** 按自然日偏移(周档:7 / 14 天)。 */
+/** 按自然日偏移(日档:0 / -2 / -4 天;周档:7 / 14 天)。 */
 function shiftDays(date: Date, days: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 }
@@ -79,12 +73,22 @@ function shiftYears(date: Date, years: number): Date {
 
 /**
  * 快捷跨度的日期范围 [起点, 今天](均 "YYYY-MM-DD",本地时区,与 getDefaultDateRange 同口径):
- * 周档按自然日减(1w=-7 / 2w=-14 天),月档按日历月减(1m/3m/6m),年档按日历年减(1y=-1 年)。
+ * 日档 = 最近 N 个自然日(含今天,起点 today-(N-1));周档按自然日减(1w=-7 / 2w=-14 天),
+ * 月档按日历月减(1m/3m/6m),年档按日历年减(1y=-1 年)。
  * today 可注入(测试用),缺省取当前时间。
  */
 export function computeQuickRange(key: QuickRangeKey, today: Date = new Date()): [string, string] {
   let start: Date;
   switch (key) {
+    case "1d":
+      start = shiftDays(today, 0);
+      break;
+    case "3d":
+      start = shiftDays(today, -2);
+      break;
+    case "5d":
+      start = shiftDays(today, -4);
+      break;
     case "1w":
       start = shiftDays(today, -7);
       break;

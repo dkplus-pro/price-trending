@@ -130,3 +130,10 @@
     padding: 24px 12px;
   }
 }
+
+/* 图表来源标注(黄金标的落到 PAXG / 上金所兜底源时的近似语义小字,图表下方)。 */
+.market-instrument-chart-note {
+  margin: 0;
+  color: var(--color-text-3);
+  font-size: 12px;
+}

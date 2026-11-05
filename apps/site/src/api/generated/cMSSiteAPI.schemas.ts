@@ -8,6 +8,8 @@
  * `{code, message, logID}`,用 HTTP 状态码 + message 表达。
  * 响应 schema 只描述 data 载荷(信封由服务端统一包装)。
  * 约定:只提供 GET;DTO 按对外需要裁剪(不原样暴露 admin 模型);媒体字段直接给 CDN 直链。
+ * 行情端点(/api/site/market/*)由服务端转发东方财富行情接口(push2/push2his),
+ * 上游响应体原样透传(data 结构随上游,不做结构化承诺),服务端带 TTL 缓存以收敛对上游的低频请求。
  *
  * OpenAPI spec version: 0.1.0
  */
@@ -17,3 +19,115 @@ export interface SiteInfo {
   logoUrl: string;
 }
 
+/**
+ * 东方财富行情接口原始响应体,结构随上游(服务端原样透传,不做结构化承诺)
+ */
+export interface MarketUpstreamPayload {
+  [key: string]: unknown;
+}
+
+/**
+ * 上金所官网 Dailyhq 原始响应体(如 {"time":[[日期,开,收,低,高],...]}),服务端原样透传,不做结构化承诺
+ */
+export interface MarketSgeUpstreamPayload {
+  [key: string]: unknown;
+}
+
+export interface Error {
+  /** HTTP 状态码 */
+  code: number;
+  /** 错误描述 */
+  message: string;
+}
+
+/**
+ * 行情查询参数非法
+ */
+export type MarketInvalidParamResponse = Error;
+
+/**
+ * 行情上游不可用(上游限流/失败,可稍后重试)
+ */
+export type MarketUpstreamUnavailableResponse = Error;
+
+export type GetMarketQuoteParams = {
+  /**
+   * 证券代码列表,逗号分隔,市场号.代码(如 1.000001,118.AU9999)
+   * @pattern ^[0-9]{1,3}\.[A-Za-z0-9]{1,16}(,[0-9]{1,3}\.[A-Za-z0-9]{1,16})*$
+   */
+  secids: string;
+};
+
+export type GetMarketKlineParams = {
+  /**
+   * 证券代码,市场号.代码(如 1.000001、118.AU9999)
+   * @pattern ^[0-9]{1,3}\.[A-Za-z0-9]{1,16}$
+   */
+  secid: string;
+  /**
+   * K 线周期(101 日线/102 周线/103 月线,缺省 101)
+   */
+  klt?: GetMarketKlineKlt;
+  /**
+   * 复权方式(0 不复权/1 前复权,缺省 1)
+   */
+  fqt?: GetMarketKlineFqt;
+  /**
+   * 开始日期 YYYYMMDD(缺省 19700101)
+   * @pattern ^[0-9]{8}$
+   */
+  beg?: string;
+  /**
+   * 结束日期 YYYYMMDD(缺省 20991231)
+   * @pattern ^[0-9]{8}$
+   */
+  end?: string;
+  /**
+   * 返回条数上限(缺省 120)
+   * @minimum 1
+   * @maximum 2000
+   */
+  lmt?: number;
+};
+
+export type GetMarketKlineKlt = (typeof GetMarketKlineKlt)[keyof typeof GetMarketKlineKlt];
+
+export const GetMarketKlineKlt = {
+  NUMBER_101: 101,
+  NUMBER_102: 102,
+  NUMBER_103: 103
+} as const;
+
+export type GetMarketKlineFqt = (typeof GetMarketKlineFqt)[keyof typeof GetMarketKlineFqt];
+
+export const GetMarketKlineFqt = {
+  NUMBER_0: 0,
+  NUMBER_1: 1
+} as const;
+
+export type GetMarketTrendsParams = {
+  /**
+   * 证券代码,市场号.代码(如 1.000001、118.AU9999)
+   * @pattern ^[0-9]{1,3}\.[A-Za-z0-9]{1,16}$
+   */
+  secid: string;
+  /**
+   * 走势天数(1 分时/5 五日,缺省 1)
+   */
+  ndays?: GetMarketTrendsNdays;
+};
+
+export type GetMarketTrendsNdays = (typeof GetMarketTrendsNdays)[keyof typeof GetMarketTrendsNdays];
+
+export const GetMarketTrendsNdays = {
+  NUMBER_1: 1,
+  NUMBER_5: 5
+} as const;
+
+export type GetMarketSgeDailyParams = {
+  /**
+   * 上金所合约代码(如 Au99.99)。pattern 保守限定 Au 前缀数字合约(Au99.99/Au99.95 等); 上金所另有 Au(T+D)、Au100g 等命名风格,确有需要再放宽 pattern,避免透传任意串
+   * @pattern ^Au[0-9]{2}\.[0-9]{2}$
+   */
+  instid: string;
+};

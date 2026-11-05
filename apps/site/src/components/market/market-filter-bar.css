@@ -31,7 +31,7 @@
   white-space: nowrap;
 }
 
-/* 日期范围包裹层:Tooltip 的触发节点 + 快捷按钮排同行容器(见 market-filter-bar.tsx 注释)。 */
+/* 日期范围包裹层:Tooltip 的触发节点(见 market-filter-bar.tsx 注释)。 */
 .market-filter-dates-wrap {
   display: inline-flex;
   align-items: center;
@@ -53,9 +53,14 @@
   width: 240px;
 }
 
-/* 快捷跨度:与周期按钮同型(button 单选组)但弱一级(mini 尺寸,不抢日期范围焦点)。 */
+/* 日期面板 extra 区(快捷档位排)——
+   Arco 把 extra 渲染在 .arco-picker-footer-extra-wrapper(自带 1px 上分隔线与内边距),
+   面板宽度有限:档位多时按钮排按内容折行(项自带 1.5px 外边距,折行后有行距),mini 尺寸不抢日期单元格焦点。
+   包裹层 .market-filter-quick-panel 只承担禁用提示的 title(按钮禁用后吞事件,故提示挂在包裹层上)。 */
 .market-filter-quick {
-  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .market-filter-source {
@@ -84,6 +89,21 @@ body .arco-picker-range-container {
   box-shadow: none;
 }
 
+/* extra 快捷档的包裹层 Arco 默认按内容取宽(max-content),在窄屏限宽面板里会跟着月历一起横向滚动;
+   钉为 100% 后快捷排按面板可见宽度折行,无需横滚即可见全部九档。 */
+body .arco-picker-footer-extra-wrapper {
+  width: 100%;
+}
+
+/* Arco 区间日期面板是双月布局,固有宽约 530px,窄屏打开时会把 documentElement 撑出横向滚动。
+   面板限宽并让月历区在面板内横向滚动;底部 extra 快捷档宽度跟随面板(不超宽),保持可见。 */
+@media (max-width: 767px) {
+  body .arco-picker-range-container {
+    max-width: calc(100vw - 16px);
+    overflow-x: auto;
+  }
+}
+
 @media (max-width: 767px) {
   .market-filter-bar {
     gap: 10px 16px;
@@ -95,19 +115,9 @@ body .arco-picker-range-container {
     flex: 1 1 auto;
   }
 
-  /* 窄屏放不下时快捷按钮排整体折到日期范围下一行。 */
+  /* 窄屏放不下时日期范围整体折到下一行(快捷档位已移入日期面板,行内不再需要折行 hack)。 */
   .market-filter-dates-wrap {
     flex: 1 1 auto;
-    flex-wrap: wrap;
-  }
-
-  /* 快捷档位(6 档)自身允许收缩与折行:inline-block 的 Arco 按钮组在窄屏一行放不下时
-     会撑破视口(实测 375px 下溢出 20px),故窄屏改为可换行的 flex 容器并允许收缩。 */
-  .market-filter-quick {
-    display: flex;
-    flex: 1 1 auto;
-    flex-wrap: wrap;
-    min-width: 0;
   }
 
   .market-filter-dates {
